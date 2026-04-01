@@ -1,8 +1,8 @@
+/* src/fsm/states/s2_parsing.js */
 import { transitionState, updateSession } from '../../services/supabase.js';
 import {
   parseForm,
   parsePartialResponse,
-  parseFlexibleInput,
   detectUserInput,
   mergeFormData,
   getMissingFields,
@@ -11,65 +11,75 @@ import {
 
 const INVOICE_QUESTION = `¿Necesitas factura?\n1. Sí\n2. No`;
 
-export async function handleParsingData(ctx) {
-  const { chatId, text, session, sender } = ctx;
+function rescueDimensions(data) {
+  if (data.largo && data.ancho && data.alto) 
+    return data;
 
-  if (!text) return;
+  if (data.medidas) {
+    const parts = data.medidas
+      .split(/[x×*]/i)
+      .map(n => parseFloat(n.trim()));
 
-  const prevData = session?.form_data || null;
-  const prevMissing = prevData ? getMissingFields(prevData) : null;
-
-  // ── 1. Parse tradicional
-  let { data: parsed } = parseForm(text);
-
-  // ── 2. 🔥 Parse flexible (NUEVO)
-  const detection = detectUserInput(text);
-
-  if (detection.hasAnyData) {
-    parsed = mergeFormData(parsed, detection.data);
-  }
-
-  // ── 3. Si solo falta 1 campo → intentar respuesta directa
-  if (prevMissing && prevMissing.length === 1) {
-    const partialFound = parsePartialResponse(text, prevMissing);
-
-    if (Object.keys(partialFound).length > 0) {
-      const merged = mergeFormData(prevData, partialFound);
-      const stillMissing = getMissingFields(merged);
-
-      if (stillMissing.length === 0) {
-        return await advanceToInvoice(ctx, merged);
-      }
-
-      await updateSession(chatId, { form_data: merged });
-      await sender.sendText(chatId, getMissingFieldMessage(stillMissing));
-      return;
+    if (parts.length === 3 && parts.every(n => !isNaN(n) && n > 0)) {
+      return {
+        ...data,
+        largo: parts[0],
+        ancho: parts[1],
+        alto: parts[2],
+      };
     }
   }
 
-  // ── 4. Merge total
-  const merged = mergeFormData(prevData, parsed);
+  return data;
+}
+
+export async function handleParsingData(ctx) {
+  const { chatId, text, session, sender } = ctx;
+  if (!text) return;
+
+  const prevData = session?.form_data || {};
+
+  let { data: parsed } = parseForm(text);
+  const detection = detectUserInput(text);
+
+  let merged = mergeFormData(prevData, parsed || {});
+  if (detection.hasAnyData) {
+    merged = mergeFormData(merged, detection.data);
+  }
+
+  merged = rescueDimensions(merged);
+
+  await updateSession(chatId, { form_data: merged });
+
   const missing = getMissingFields(merged);
 
   if (missing.length === 0) {
-    return await advanceToInvoice(ctx, merged);
+    const { success } = await transitionState(
+      chatId,
+      'AWAITING_FORMAT',
+      'AWAITING_INVOICE',
+      { form_data: merged }
+    );
+
+    if (success) {
+      await sender.sendText(chatId, INVOICE_QUESTION);
+    }
+    return;
   }
 
-  // ── 5. Guardar progreso y pedir faltantes
-  await updateSession(chatId, { form_data: merged });
   await sender.sendText(chatId, getMissingFieldMessage(missing));
 }
 
-// ─────────────────────────────────────────
-
 async function advanceToInvoice(ctx, formData) {
   const { chatId, sender } = ctx;
+
+  const safeData = rescueDimensions(formData);
 
   const { success } = await transitionState(
     chatId,
     'AWAITING_FORMAT',
     'AWAITING_INVOICE',
-    { form_data: formData }
+    { form_data: safeData }
   );
 
   if (!success) return;

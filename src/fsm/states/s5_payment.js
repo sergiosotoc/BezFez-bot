@@ -14,19 +14,8 @@ const VALID_MIME_TYPES = new Set([
   'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'application/pdf',
 ]);
 
-/**
- * S5: AWAITING_PAYMENT
- *
- * Espera una imagen o PDF del comprobante.
- * 1. Valida que sea imagen o PDF
- * 2. Descarga el buffer del mensaje de Baileys
- * 3. Sube a Supabase Storage con reintentos exponenciales
- * 4. Guarda URL en file_uploads
- * 5. Notifica al admin con resumen + forward del comprobante
- * 6. Transiciona a PAUSED y arranca el deadman switch
- */
 export async function handleAwaitingPayment(ctx) {
-  const { chatId, clientPhone, messageType, message, rawMessage, session, sender } = ctx;
+  const { chatId, clientPhone, pushName, messageType, message, rawMessage, session, sender } = ctx;
 
   // ── 1. Validar tipo de mensaje ────────────────────────
   const fileBuffer = await extractFileBuffer(messageType, rawMessage);
@@ -41,10 +30,7 @@ export async function handleAwaitingPayment(ctx) {
   const folio = form_data?.current_folio;
 
   if (!form_data || !form_data.current_folio) {
-    await sender.sendText(
-      chatId,
-      UPLOAD_ERROR_MSG
-    );
+    await sender.sendText(chatId, UPLOAD_ERROR_MSG);
     return;
   }
 
@@ -78,6 +64,7 @@ export async function handleAwaitingPayment(ctx) {
     total:     total_amount,
     clientJid:   chatId,
     clientPhone: clientPhone,
+    pushName, // ← nombre de perfil de WhatsApp
     formData:    form_data,
     calc: {
       pesoFacturable: billable_weight,
@@ -86,18 +73,19 @@ export async function handleAwaitingPayment(ctx) {
     invoice: invoice_required,
   });
 
+  // Enviar resumen + comprobante al admin
   await sender.forwardMessage(config.admin.jid, rawMessage, adminSummary);
 
   // ── 6. Transicionar a PAUSED ──────────────────────────
   const { success } = await transitionState(chatId, 'AWAITING_PAYMENT', 'PAUSED');
   if (!success) return;
 
-  const clientName = form_data?.nombre_origen || chatId;
+  // Ahora usamos pushName como nombre del cliente
+  const clientName = pushName || chatId;
   await startPause(chatId, folio, clientName);
 }
 
 // ── Helper: extrae buffer según tipo de mensaje ───────────
-
 async function extractFileBuffer(messageType, rawMessage) {
   const { downloadMediaMessage } = await import('@whiskeysockets/baileys');
 
@@ -108,7 +96,7 @@ async function extractFileBuffer(messageType, rawMessage) {
   } else if (messageType === 'documentMessage') {
     mimeType = rawMessage.message?.documentMessage?.mimetype || 'application/pdf';
   } else {
-    return null; // texto, contacto, audio, etc.
+    return null;
   }
 
   if (!VALID_MIME_TYPES.has(mimeType)) return null;

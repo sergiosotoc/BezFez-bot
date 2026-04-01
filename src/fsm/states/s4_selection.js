@@ -47,10 +47,6 @@ export async function handleAwaitingSelection(ctx) {
 
   let selection = null;
 
-  // ─────────────────────────────────────────
-  // 1. MANEJO DE RESPUESTA A PREGUNTA PREVIA
-  // ─────────────────────────────────────────
-
   if (pending_selection === 'estafeta') {
     if (/express|exp|rapido|rápido/i.test(text)) {
       selection = { id: 1, label: 'Estafeta Express' };
@@ -79,10 +75,6 @@ export async function handleAwaitingSelection(ctx) {
   if (selection) {
     await updateSession(chatId, { pending_selection: null });
   }
-
-  // ─────────────────────────────────────────
-  // 2. SI NO HABÍA CONTEXTO, PARSEAR NORMAL
-  // ─────────────────────────────────────────
 
   if (!selection) {
     const parsed = parseCarrierSelection(text);
@@ -113,10 +105,6 @@ export async function handleAwaitingSelection(ctx) {
     selection = parsed;
   }
 
-  // ─────────────────────────────────────────
-  // 3. VALIDAR SELECCIÓN FINAL
-  // ─────────────────────────────────────────
-
   const chosen = quotes.find(q => q.id === selection.id);
 
   if (!chosen) {
@@ -124,12 +112,7 @@ export async function handleAwaitingSelection(ctx) {
     return;
   }
 
-  // ─────────────────────────────────────────
-  // 4. BIFURCACIÓN: ¿Faltan datos del formulario?
-  // ─────────────────────────────────────────
-
   if (needsAddressCollection(form_data)) {
-    // ── 4a. Ir a AWAITING_ADDRESS para recolectar datos faltantes ──
     const { success } = await transitionState(
       chatId,
       'AWAITING_SELECTION',
@@ -138,7 +121,6 @@ export async function handleAwaitingSelection(ctx) {
         selected_carrier: chosen.label,
         total_amount: chosen.total,
         pending_selection: null,
-        // NO creamos orden aún — la crea s4b_address.js cuando tenga todos los datos
       }
     );
 
@@ -147,10 +129,6 @@ export async function handleAwaitingSelection(ctx) {
     await sender.sendText(chatId, buildInitialAddressRequest(form_data));
     return;
   }
-
-  // ─────────────────────────────────────────
-  // 4b. TODOS LOS DATOS COMPLETOS → Crear orden directamente
-  // ─────────────────────────────────────────
 
   const order = await createOrder({
     chat_id: chatId,

@@ -1,145 +1,121 @@
 /* src/fsm/states/s4b_address.js */
 import { transitionState, updateSession } from '../../services/supabase.js';
 import { parseForm, mergeFormData } from '../../parsers/formParser.js';
-import { formatPaymentMessage } from '../../services/calculator.js';
 import { createOrder } from '../../services/supabase.js';
 
-const OPTIONAL_FIELDS = [
-  'nombre_origen', 'calle_origen', 'colonia_origen', 'ciudad_origen', 'cel_origen',
-  'nombre_destino', 'calle_destino', 'colonia_destino', 'ciudad_destino', 'cel_destino',
+const REQUIRED_FIELDS = [
+  'nombre_origen',
+  'calle_origen',
+  'colonia_origen',
+  'ciudad_origen',
+  'cel_origen',
+  'nombre_destino',
+  'calle_destino',
+  'colonia_destino',
+  'ciudad_destino',
+  'cel_destino',
   'contenido',
 ];
 
-function getMissingOptionalFields(formData) {
-  return OPTIONAL_FIELDS.filter(f => !formData[f]);
+function getMissingFields(formData) {
+  return REQUIRED_FIELDS.filter(f => {
+    const val = formData[f];
+    if (!val) return true;
+    const strVal = String(val).trim();
+    if (f.startsWith('cel_')) return strVal.length < 10;
+    return strVal.length < 2;
+  });
 }
 
-// Pregunta conversacional cuando solo falta un campo
+function cleanPhone(value) {
+  if (!value) return null;
+  let cleaned = String(value).replace(/[^0-9]/g, '');
+  if (cleaned.startsWith('52') && cleaned.length === 12) cleaned = cleaned.slice(2);
+  return cleaned.length === 10 ? cleaned : null;
+}
+
 const SINGLE_FIELD_PROMPT = {
-  nombre_origen:   '¿Cuál es el *nombre del remitente*?',
-  calle_origen:    '¿Cuál es la *calle y número de origen*?',
-  colonia_origen:  '¿Cuál es la *colonia de origen*?',
-  ciudad_origen:   '¿Cuál es la *ciudad y estado de origen*?',
-  cel_origen:      '¿Cuál es el *celular del remitente*?',
-  nombre_destino:  '¿Cuál es el *nombre del destinatario*?',
-  calle_destino:   '¿Cuál es la *calle y número de destino*?',
-  colonia_destino: '¿Cuál es la *colonia de destino*?',
-  ciudad_destino:  '¿Cuál es la *ciudad y estado de destino*?',
-  cel_destino:     '¿Cuál es el *celular del destinatario*?',
-  contenido:       '¿Qué contiene el paquete? (ej: ropa, electrónicos, peluches)',
+  nombre_origen: '👤 ¿Cuál es el *nombre del remitente*?',
+  calle_origen: '📍 ¿Cuál es la *calle y número de origen*?',
+  colonia_origen: '🏘️ ¿Cuál es la *colonia de origen*?',
+  ciudad_origen: '🌆 ¿Cuál es la *ciudad y estado de origen*?',
+  cel_origen: '📱 ¿Cuál es el *celular del remitente*? (10 dígitos)',
+  nombre_destino: '👤 ¿Cuál es el *nombre del destinatario*?',
+  calle_destino: '📍 ¿Cuál es la *calle y número de destino*?',
+  colonia_destino: '🏘️ ¿Cuál es la *colonia de destino*?',
+  ciudad_destino: '🌆 ¿Cuál es la *ciudad y estado de destino*?',
+  cel_destino: '📱 ¿Cuál es el *celular del destinatario*? (10 dígitos)',
+  contenido: '📦 ¿Qué contiene el paquete? (ej: ropa, calzado)',
 };
 
 function buildAddressForm(missingFields) {
-  // Un solo campo: pregunta conversacional
-  if (missingFields.length === 1) {
-    return SINGLE_FIELD_PROMPT[missingFields[0]] ||
-      `Por favor indícame: ${missingFields[0].replace(/_/g, ' ')}`;
+  // Si faltan pocos campos, aún se pide uno por uno
+  if (missingFields.length <= 3) {
+    return SINGLE_FIELD_PROMPT[missingFields[0]];
   }
 
-  // Varios campos: formato a rellenar
-  const origenFields = {
-    nombre_origen:  'Nombre Origen:',
-    calle_origen:   'Calle y Numero Origen:',
-    colonia_origen: 'Colonia Origen:',
-    ciudad_origen:  'Ciudad y Estado Origen:',
-    cel_origen:     'Cel Origen:',
-  };
-  const destinoFields = {
-    nombre_destino:  'Nombre Destino:',
-    calle_destino:   'Calle y Numero Destino:',
-    colonia_destino: 'Colonia Destino:',
-    ciudad_destino:  'Ciudad y Estado Destino:',
-    cel_destino:     'Cel Destino:',
-  };
-  const paqueteFields = {
-    contenido: 'Contenido:',
-  };
-
-  const missingSet   = new Set(missingFields);
-  const origenLines  = Object.entries(origenFields).filter(([k]) => missingSet.has(k));
-  const destinoLines = Object.entries(destinoFields).filter(([k]) => missingSet.has(k));
-  const paqueteLines = Object.entries(paqueteFields).filter(([k]) => missingSet.has(k));
-
+  // Si faltan varios, mostrar el formulario completo
   const lines = [
     '📦 *PASO 2 – GENERAR TU GUÍA*',
     '',
-    '¡Excelente elección! Para crear tu guía necesito algunos datos adicionales.',
-    'Por favor copia y rellena el siguiente formato:',
+    'Necesito estos datos para completar tu guía. Puedes enviarlos uno por uno o rellenar este formato:',
     '',
+    '*ORIGEN*',
+    'Nombre Origen:',
+    'Calle y Número Origen:',
+    'Colonia Origen:',
+    'Ciudad y Estado Origen:',
+    'Cel Origen:',
+    '',
+    '*DESTINO*',
+    'Nombre Destino:',
+    'Calle y Número Destino:',
+    'Colonia Destino:',
+    'Ciudad y Estado Destino:',
+    'Cel Destino:',
+    '',
+    '*PAQUETE*',
+    'Contenido:',
   ];
-
-  if (origenLines.length > 0) {
-    lines.push('*ORIGEN* 📍');
-    origenLines.forEach(([, label]) => lines.push(label));
-    lines.push('');
-  }
-  if (destinoLines.length > 0) {
-    lines.push('*DESTINO* 📍');
-    destinoLines.forEach(([, label]) => lines.push(label));
-    lines.push('');
-  }
-  if (paqueteLines.length > 0) {
-    lines.push('*PAQUETE* 📦');
-    paqueteLines.forEach(([, label]) => lines.push(label));
-    lines.push('');
-  }
 
   return lines.join('\n');
 }
 
 export async function handleAwaitingAddress(ctx) {
   const { chatId, text, session, sender } = ctx;
-
   if (!text) return;
 
-  const { form_data, invoice_required, billable_weight, oversize_charge } = session;
+  const { form_data, selected_carrier, total_amount, invoice_required, billable_weight, oversize_charge } = session;
 
-  if (!form_data) {
-    await sender.sendText(chatId, 'Hubo un error con tus datos. Escribe *hola* para reiniciar.');
-    return;
-  }
+  let merged = { ...form_data };
 
-  // ── 1. Parsear con el parser estructurado y mergear ───────
-  const { data: parsed } = parseForm(text);
-  let merged = mergeFormData(form_data, parsed);
+  if (text.length > 50) {
+    const { data: parsedFull } = parseForm(text);
+    merged = mergeFormData(merged, parsedFull);
+  } else {
+    const missingBefore = getMissingFields(merged);
+    const fieldToFill = missingBefore[0];
+    const value = text.trim();
 
-  // ── 2. Respuesta directa para campo único ─────────────────
-  // Si antes del parse faltaba exactamente 1 campo y después sigue
-  // faltando el mismo, el mensaje completo del cliente ES ese valor.
-  const prevMissing  = getMissingOptionalFields(form_data);
-  const afterParsing = getMissingOptionalFields(merged);
-
-  if (
-    prevMissing.length === 1 &&
-    afterParsing.length === 1 &&
-    prevMissing[0] === afterParsing[0]
-  ) {
-    const field   = prevMissing[0];
-    const trimmed = text.trim();
-
-    const isValid = (field === 'cel_origen' || field === 'cel_destino')
-      ? /^\+?[\d\s\-()]{7,}$/.test(trimmed)
-      : trimmed.length >= 2;
-
-    if (isValid) {
-      merged = mergeFormData(merged, { [field]: trimmed });
+    if (fieldToFill === 'cel_origen' || fieldToFill === 'cel_destino') {
+      const cleaned = cleanPhone(value);
+      if (cleaned) {
+        merged[fieldToFill] = cleaned;
+      } else {
+        await sender.sendText(chatId, `⚠️ Teléfono inválido. Debe tener 10 dígitos.\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
+        return;
+      }
+    } else {
+      if (value.length >= 2) merged[fieldToFill] = value;
     }
   }
 
-  const stillMissing = getMissingOptionalFields(merged);
+  const missingAfter = getMissingFields(merged);
 
-  // ── 3. Faltan campos → guardar progreso y preguntar ───────
-  if (stillMissing.length > 0) {
-    await updateSession(chatId, { form_data: merged });
-    await sender.sendText(chatId, buildAddressForm(stillMissing));
-    return;
-  }
+  await updateSession(chatId, { form_data: merged });
 
-  // ── 4. Todo completo → crear orden ───────────────────────
-  const { selected_carrier, total_amount } = session;
-
-  if (!selected_carrier || !total_amount) {
-    await sender.sendText(chatId, 'Hubo un error con tu selección. Escribe *hola* para reiniciar.');
+  if (missingAfter.length > 0) {
+    await sender.sendText(chatId, buildAddressForm(missingAfter));
     return;
   }
 
@@ -154,26 +130,28 @@ export async function handleAwaitingAddress(ctx) {
     status: 'PENDING_PAYMENT',
   });
 
-  // ── 5. Transición a AWAITING_PAYMENT ─────────────────────
   const { success } = await transitionState(
     chatId,
     'AWAITING_ADDRESS',
     'AWAITING_PAYMENT',
-    { form_data: { ...merged, current_folio: order.folio } }
+    {
+      form_data: {
+        ...merged,
+        current_folio: order.folio
+      }
+    }
   );
 
-  if (!success) return;
-
-  // ── 6. PASO 3: mensaje de pago ────────────────────────────
-  const paymentMsg = formatPaymentMessage(order.folio, total_amount);
-  await sender.sendText(chatId, paymentMsg);
+  if (success) {
+    const { formatPaymentMessage } = await import('../../services/calculator.js');
+    await sender.sendText(chatId, formatPaymentMessage(order.folio, total_amount, merged));
+  }
 }
 
 export function needsAddressCollection(formData) {
-  return getMissingOptionalFields(formData).length > 0;
+  return getMissingFields(formData).length > 0;
 }
 
 export function buildInitialAddressRequest(formData) {
-  const missing = getMissingOptionalFields(formData);
-  return buildAddressForm(missing);
+  return buildAddressForm(getMissingFields(formData));
 }

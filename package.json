@@ -1,7 +1,7 @@
 {
-  "name": "ahse-bot",
+  "name": "bazfez-bot",
   "version": "1.0.0",
-  "description": "AHSE Paqueteria WhatsApp chatbot para cotizaciones de guías",
+  "description": "BazFez Paqueteria WhatsApp chatbot para cotizaciones de guías",
   "main": "src/index.js",
   "type": "module",
   "scripts": {

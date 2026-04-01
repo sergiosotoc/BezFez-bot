@@ -7,9 +7,17 @@ function normalize(str) {
     .toLowerCase();
 }
 
-// ─────────────────────────────────────────────────────────
-// HELPERS DE EXTRACCIÓN
-// ─────────────────────────────────────────────────────────
+function normalizePhone(phone) {
+  if (!phone) return null;
+
+  let cleaned = String(phone).replace(/[\s\-().+]/g, '').replace(/\D/g, '');
+
+  if (cleaned.startsWith('52') && cleaned.length === 12) {
+    cleaned = cleaned.slice(2);
+  }
+
+  return cleaned.length === 10 ? cleaned : null;
+}
 
 function extractField(originalText, normText, ...patterns) {
   for (const pattern of patterns) {
@@ -25,17 +33,20 @@ function extractField(originalText, normText, ...patterns) {
   return null;
 }
 
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function extractCP(text, side) {
   const norm = normalize(text);
   const normSide = normalize(side);
+  const escapedSide = escapeRegex(normSide);
 
-  // Patrón con etiqueta: "cp origen: 34000"
   const labeled = norm.match(
-    new RegExp(`cp\\s*${normSide}\\s*:\\s*(\\d{5})`)
+    new RegExp(`cp\\s*${escapedSide}\\s*[:\\-]?\\s*(\\d{5})`)
   );
   if (labeled) return labeled[1];
 
-  // Línea que contiene la palabra lado + 5 dígitos
   const lines = text.split('\n');
   for (const line of lines) {
     if (!normalize(line).includes(normSide)) continue;
@@ -50,11 +61,11 @@ function extractMedidas(text) {
   const norm = normalize(text);
 
   const labeled = norm.match(
-    /medidas?\s*(?:\(lxaxa\))?\s*:\s*([\d.]+\s*[x×*]\s*[\d.]+\s*[x×*]\s*[\d.]+)/i
+    /medidas?\s*(?:\(lxaxa\))?\s*[:\-]?\s*([\d.]+\s*[x×*]\s*[\d.]+\s*[x×*]\s*[\d.]+)(?:\s*cm)?/i
   );
   if (labeled) return labeled[1].replace(/\s/g, '');
 
-  const bare = norm.match(/\b([\d.]+\s*[x×*]\s*[\d.]+\s*[x×*]\s*[\d.]+)\b/);
+  const bare = norm.match(/\b(\d+(?:\.\d+)?\s*[x×*]\s*\d+(?:\.\d+)?\s*[x×*]\s*\d+(?:\.\d+)?)(?:\s*cm)?\b/);
   return bare ? bare[1].replace(/\s/g, '') : null;
 }
 
@@ -79,33 +90,41 @@ function parseDimensions(medidas) {
 
 function extractPeso(text) {
   const norm = normalize(text);
-  const match = norm.match(/peso\s*(?:\(kg\))?\s*:\s*([\d.]+)/);
-  if (match) return parseFloat(match[1]);
+
+  const labeled = norm.match(/peso\s*(?:\(kg\))?\s*[:\-]?\s*([\d.]+)/);
+  if (labeled) return parseFloat(labeled[1]);
+
+  const natural = norm.match(/pesa\s*([\d.]+)/) ||
+    norm.match(/([\d.]+)\s*kg\b/) ||
+    norm.match(/([\d.]+)\s*kilos?\b/);
+  if (natural) return parseFloat(natural[1]);
+
   return null;
 }
 
-// ─────────────────────────────────────────────────────────
-// PARSER DE FORMATO LIBRE (Remitente / Destinatario)
-// ─────────────────────────────────────────────────────────
+function detectLooseNumbers(text) {
+  const numbers = text.match(/\b\d{5}\b/g) || [];
+  const weight = text.match(/\b(\d+(?:\.\d+)?)\s*kg?\b/i);
 
-/**
- * Detecta si el mensaje usa el formato libre "Remitente / Destinatario"
- * en lugar del formulario etiquetado estándar.
- */
+  const data = {};
+
+  if (numbers.length >= 2) {
+    data.cp_origen = numbers[0];
+    data.cp_destino = numbers[1];
+  }
+
+  if (weight) {
+    data.peso = parseFloat(weight[1]);
+  }
+
+  return data;
+}
+
 function isFormatoLibre(text) {
   const norm = normalize(text);
   return /remitente|destinatario|envia|envia desde|envia a/i.test(norm);
 }
 
-/**
- * Extrae un bloque de texto entre dos marcadores de sección.
- * Ej: entre "Remitente" y "Destinatario".
- *
- * @param {string} text
- * @param {RegExp} startPattern  - inicio del bloque
- * @param {RegExp} endPattern    - inicio del siguiente bloque (o fin del texto)
- * @returns {string}
- */
 function extractBlock(text, startPattern, endPattern) {
   const start = text.search(startPattern);
   if (start === -1) return '';
@@ -117,18 +136,6 @@ function extractBlock(text, startPattern, endPattern) {
   return afterStart.slice(0, end + 1);
 }
 
-/**
- * Dado un bloque de texto de una persona (remitente o destinatario),
- * extrae nombre, calle, colonia, ciudad, cp y teléfono.
- *
- * Soporta formatos como:
- *   Juan Pastrano
- *   Calle Av. Manuel Ávila Camacho #1899
- *   Col. Chapultepec Country
- *   C.p 44620
- *   Guadalajara Jalisco
- *   Cel. 3314334234
- */
 function parsePersonBlock(block) {
   const lines = block
     .split('\n')
@@ -142,11 +149,9 @@ function parsePersonBlock(block) {
     const line = lines[i];
     const n = norm(line);
 
-    // Saltar la línea del encabezado de sección (Remitente / Destinatario)
     if (/^(remitente|destinatario|envia|datos\s+de)/.test(n)) continue;
 
-    // ── CP ────────────────────────────────────────────────
-    // "C.p 44620", "CP: 44620", "CP 44620", "c.p. 44620"
+
     const cpMatch = n.match(/\bc\.?\s*p\.?\s*[:\s]\s*(\d{5})\b/) ||
       n.match(/\bcp\s*[:\s]\s*(\d{5})\b/) ||
       line.match(/\b(\d{5})\b/);
@@ -155,46 +160,50 @@ function parsePersonBlock(block) {
       continue;
     }
 
-    // ── TELÉFONO ──────────────────────────────────────────
-    // "Cel. 3314334234", "Tel 656 585 7932", "Tel. +52..."
     const telMatch = n.match(/(?:cel(?:ular)?|tel(?:e?fono)?|whatsapp)\s*\.?\s*[:\s]\s*([\d\s\-+()]{7,})/);
     if (telMatch && !data.cel) {
-      data.cel = telMatch[1].replace(/[\s\-()]/g, '').replace(/^\+52/, '');
+      const phone = normalizePhone(telMatch[1]);
+
+      if (phone) {
+        data.cel = phone;
+      } else {
+        data.invalid_phone = true;
+      }
+
       continue;
     }
 
-    // Línea que es solo números (teléfono sin etiqueta)
     const soloNumeros = line.replace(/[\s\-()]/g, '');
     if (/^\+?[\d]{10,15}$/.test(soloNumeros) && !data.cel) {
-      data.cel = soloNumeros.replace(/^\+52/, '');
+      const phone = normalizePhone(soloNumeros);
+
+      if (phone) {
+        data.cel = phone;
+      } else {
+        data.invalid_phone = true;
+      }
+
       continue;
     }
 
-    // ── COLONIA ───────────────────────────────────────────
-    // "Col. Chapultepec Country", "Colonia El Barreal"
     const colMatch = line.match(/^col(?:onia)?\.?\s+(.+)/i);
     if (colMatch && !data.colonia) {
       data.colonia = colMatch[1].trim();
       continue;
     }
 
-    // ── CALLE ─────────────────────────────────────────────
-    // "Calle Av. Manuel...", "Calle: 2 de abril 1045"
+
     const calleMatch = line.match(/^calle\s*[:\s]\s*(.+)/i);
     if (calleMatch && !data.calle) {
       data.calle = calleMatch[1].trim();
       continue;
     }
 
-    // Línea que contiene número de calle (#123, No. 45, num 78)
     if (!data.calle && /(#\d|no\.?\s*\d|num\.?\s*\d|\d+(,|\s|$))/i.test(line) && !data.cp) {
       data.calle = line.trim();
       continue;
     }
 
-    // ── CIUDAD/ESTADO ─────────────────────────────────────
-    // "Guadalajara Jalisco", "Cd Juárez Chihuahua", "Ciudad de México CDMX"
-    // Heurística: línea sin números (ya usamos CP) con al menos 2 palabras
     if (!data.ciudad && !data.cp &&
       /[a-záéíóúüñ]{3,}/i.test(line) &&
       !/^col/i.test(line) &&
@@ -202,64 +211,37 @@ function parsePersonBlock(block) {
       !/(?:cel|tel|whatsapp)/i.test(n) &&
       line.split(/\s+/).length >= 2 &&
       !/\d{5}/.test(line)) {
-      // Si ya tenemos nombre, esto puede ser ciudad
       if (data.nombre) {
         data.ciudad = line.trim();
         continue;
       }
     }
 
-    // ── NOMBRE ────────────────────────────────────────────
-    // Primera línea de texto puro (sin etiquetas, sin números de calle)
     if (!data.nombre &&
       /[a-záéíóúüñ]{2,}/i.test(line) &&
       !/^col/i.test(line) &&
       !/^calle/i.test(line) &&
-      !/(#\d|no\.?\s*\d|num\.?\s*\d)/i.test(line) &&
       !/(?:cel|tel|whatsapp)/i.test(n) &&
-      !/\b\d{5}\b/.test(line)) {
+      !/\d{5}/.test(line)) {
       data.nombre = line.trim();
       continue;
     }
 
-    // ── CIUDAD (segunda pasada) ────────────────────────────
-    // Líneas que quedaron sin clasificar con 2+ palabras y sin números
     if (!data.ciudad &&
       /[a-záéíóúüñ]{3,}/i.test(line) &&
       line.split(/\s+/).length >= 2 &&
       !/\d{5}/.test(line) &&
-      !/(?:cel|tel)/i.test(n)) {
+      !/(?:cel|tel|whatsapp)/i.test(n)) {
       data.ciudad = line.trim();
     }
-  }
 
+  }
   return data;
 }
 
-/**
- * Parser para mensajes en formato libre: Remitente / Destinatario.
- *
- * Extrae los datos de origen y destino de un mensaje como:
- *
- *   Remitente
- *   Juan Pastrano
- *   Calle Av. Manuel Ávila Camacho #1899
- *   Col. Chapultepec Country
- *   C.p 44620
- *   Guadalajara Jalisco
- *   Cel. 3314334234
- *
- *   Destinatario
- *   Axel david Reyes Vargas
- *   ...
- *
- * @param {string} text
- * @returns {object} - Campos compatibles con el resto del sistema
- */
 export function parseFormatoLibre(text) {
   const data = {};
 
-  // ── Separar bloques ───────────────────────────────────────
   const origenBlock = extractBlock(
     text,
     /remitente|envia(nte)?|origen/i,
@@ -272,7 +254,6 @@ export function parseFormatoLibre(text) {
     /medidas|peso|contenido|paquete/i
   );
 
-  // ── Parsear cada bloque ───────────────────────────────────
   if (origenBlock) {
     const origen = parsePersonBlock(origenBlock);
     if (origen.nombre) data.nombre_origen = origen.nombre;
@@ -281,6 +262,7 @@ export function parseFormatoLibre(text) {
     if (origen.ciudad) data.ciudad_origen = origen.ciudad;
     if (origen.cp) data.cp_origen = origen.cp;
     if (origen.cel) data.cel_origen = origen.cel;
+    if (origen.invalid_phone) data.invalid_phone_origen = true;
   }
 
   if (destinoBlock) {
@@ -291,9 +273,9 @@ export function parseFormatoLibre(text) {
     if (destino.ciudad) data.ciudad_destino = destino.ciudad;
     if (destino.cp) data.cp_destino = destino.cp;
     if (destino.cel) data.cel_destino = destino.cel;
+    if (destino.invalid_phone) data.invalid_phone_destino = true;
   }
 
-  // ── Medidas y peso (fuera de los bloques, al final) ───────
   const medidas = extractMedidas(text);
   if (medidas) {
     data.medidas = medidas;
@@ -312,22 +294,27 @@ export function parseFormatoLibre(text) {
     if (peso > 0 && peso <= 1000) data.peso = peso;
   }
 
-  // ── Contenido ─────────────────────────────────────────────
   const contenidoMatch = text.match(/contenido\s*[:\s]\s*(.+)/i);
   if (contenidoMatch) data.contenido = contenidoMatch[1].trim();
 
   return data;
 }
 
-// ─────────────────────────────────────────────────────────
-// PARSER PRINCIPAL DEL FORMULARIO COMPLETO
-// ─────────────────────────────────────────────────────────
-
 export function parseForm(text) {
   const t = text.replace(/\*/g, '').replace(/\r/g, '');
-  const norm = normalize(t); 
+  const norm = normalize(t);
 
-  // ── Intentar primero el formato libre ─────────────────────
+  const rawCelOrigen = extractField(t, norm,
+    /cel(?:ular)?\s+origen\s*:\s*(.+)/i,
+    /tel(?:e?fono)?\s+origen\s*:\s*(.+)/i);
+
+  const rawCelDestino = extractField(t, norm,
+    /cel(?:ular)?\s+destino\s*:\s*(.+)/i,
+    /tel(?:e?fono)?\s+destino\s*:\s*(.+)/i);
+
+  const cel_origen = normalizePhone(rawCelOrigen);
+  const cel_destino = normalizePhone(rawCelDestino);
+
   if (isFormatoLibre(t)) {
     const libreData = parseFormatoLibre(t);
     if (Object.keys(libreData).length > 0) {
@@ -337,52 +324,55 @@ export function parseForm(text) {
     }
   }
 
-  // ── Formato estándar con etiquetas ────────────────────────
   const data = {
     nombre_origen: extractField(t, norm,
       /nombre\s+origen\s*:\s*(.+)/i),
- 
+
     calle_origen: extractField(t, norm,
       /calle\s+y\s+nu?m(?:ero)?\s+origen\s*:\s*(.+)/i,
       /calle\s+origen\s*:\s*(.+)/i),
- 
+
     colonia_origen: extractField(t, norm,
       /colonia\s+origen\s*:\s*(.+)/i),
- 
+
     ciudad_origen: extractField(t, norm,
       /ciudad\s+y\s+estado\s+origen\s*:\s*(.+)/i,
       /ciudad\s+origen\s*:\s*(.+)/i),
- 
+
     cp_origen: extractCP(t, 'origen'),
- 
-    cel_origen: extractField(t, norm,
-      /cel(?:ular)?\s+origen\s*:\s*(.+)/i,
-      /tel(?:e?fono)?\s+origen\s*:\s*(.+)/i),
- 
+
+    cel_origen,
+
     nombre_destino: extractField(t, norm,
       /nombre\s+destino\s*:\s*(.+)/i),
- 
+
     calle_destino: extractField(t, norm,
       /calle\s+y\s+nu?m(?:ero)?\s+destino\s*:\s*(.+)/i,
       /calle\s+destino\s*:\s*(.+)/i),
- 
+
     colonia_destino: extractField(t, norm,
       /colonia\s+destino\s*:\s*(.+)/i),
- 
+
     ciudad_destino: extractField(t, norm,
       /ciudad\s+y\s+estado\s+destino\s*:\s*(.+)/i,
       /ciudad\s+destino\s*:\s*(.+)/i),
- 
+
     cp_destino: extractCP(t, 'destino'),
- 
-    cel_destino: extractField(t, norm,
-      /cel(?:ular)?\s+destino\s*:\s*(.+)/i,
-      /tel(?:e?fono)?\s+destino\s*:\s*(.+)/i),
- 
-    medidas:   extractMedidas(t),
-    peso:      extractPeso(t),
+
+    cel_destino,
+
+    medidas: extractMedidas(t),
+    peso: extractPeso(t),
     contenido: extractField(t, norm, /contenido\s*:\s*(.+)/i),
   };
+
+  if (rawCelOrigen && !cel_origen) {
+    data.invalid_phone_origen = true;
+  }
+
+  if (rawCelDestino && !cel_destino) {
+    data.invalid_phone_destino = true;
+  }
 
   if (data.medidas) {
     const dims = parseDimensions(data.medidas);
@@ -404,99 +394,158 @@ export function parseForm(text) {
   return { data, missing };
 }
 
-// ─────────────────────────────────────────────────────────
-// PARSER PARCIAL
-// ─────────────────────────────────────────────────────────
+export function mergeFormData(prev = {}, next = {}) {
+  const result = { ...prev };
+  Object.entries(next).forEach(([key, value]) => {
+    if (value !== null && value !== undefined && String(value).trim() !== '') {
+      result[key] = value;
+    }
+  });
+  return result;
+}
 
 export function parsePartialResponse(text, fieldKeys) {
   const t = text.replace(/\*/g, '').replace(/\r/g, '').trim();
-  const found = {};
+  const lines = t.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
-  for (const field of fieldKeys) {
-    switch (field) {
-      case 'cp_origen': {
-        const cp = t.match(/^\s*(\d{5})\s*$/) || t.match(/\b(\d{5})\b/);
-        if (cp) found.cp_origen = cp[1];
-        break;
-      }
-      case 'cp_destino': {
-        const cp = t.match(/^\s*(\d{5})\s*$/) || t.match(/\b(\d{5})\b/);
-        if (cp) found.cp_destino = cp[1];
-        break;
-      }
-      case 'medidas':
-      case 'largo': {
-        const med = extractMedidas(t) || (() => {
-          const bare = t.match(/([\d.]+\s*[x×*]\s*[\d.]+\s*[x×*]\s*[\d.]+)/i);
-          return bare ? bare[1].replace(/\s/g, '') : null;
-        })();
-        if (med) {
-          found.medidas = med;
-          const dims = parseDimensions(med);
-          if (dims) {
-            found.largo = dims.largo;
-            found.ancho = dims.ancho;
-            found.alto = dims.alto;
-          }
-        }
-        break;
-      }
-      case 'peso': {
-        const p = normalize(t).match(/^([\d.]+)\s*(?:kg)?$/) ||
-          normalize(t).match(/peso\s*(?:\(kg\))?\s*:\s*([\d.]+)/);
-        if (p) {
-          const value = parseFloat(p[1]);
-          if (value > 0 && value <= 1000) found.peso = value;
-        }
-        break;
+  const found = {};
+  let fieldIndex = 0;
+
+  for (const line of lines) {
+    if (fieldIndex >= fieldKeys.length) break;
+
+    const currentField = fieldKeys[fieldIndex];
+
+    if (currentField === 'cel_origen' || currentField === 'cel_destino') {
+      const phone = normalizePhone(line);
+
+      if (phone) {
+        found[currentField] = phone;
+        fieldIndex++;
+        continue;
+      } else {
+        found[`invalid_${currentField}`] = true;
+        continue;
       }
     }
+
+    if (currentField === 'cp_origen' || currentField === 'cp_destino') {
+      const cp = line.match(/\b(\d{5})\b/);
+      if (cp) {
+        found[currentField] = cp[1];
+        fieldIndex++;
+        continue;
+      }
+    }
+
+    if (currentField === 'medidas' || currentField === 'largo') {
+      const med = extractMedidas(line);
+      if (med) {
+        found.medidas = med;
+        const dims = parseDimensions(med);
+        if (dims) {
+          found.largo = dims.largo;
+          found.ancho = dims.ancho;
+          found.alto = dims.alto;
+        }
+        fieldIndex++;
+        continue;
+      }
+    }
+
+    if (currentField === 'peso') {
+      const p = normalize(line).match(/(\d+(\.\d+)?)/);
+      if (p) {
+        const value = parseFloat(p[1]);
+        if (value > 0 && value <= 1000) {
+          found.peso = value;
+          fieldIndex++;
+          continue;
+        }
+      }
+    }
+
+    if (currentField === 'contenido') {
+      if (line.length > 2) {
+        found.contenido = line;
+        fieldIndex++;
+        continue;
+      }
+    }
+
+    found[currentField] = line;
+    fieldIndex++;
   }
 
   return found;
 }
 
-// ─────────────────────────────────────────────────────────
-// MERGE
-// ─────────────────────────────────────────────────────────
 
-export function mergeFormData(prev, newData) {
-  const merged = { ...(prev || {}) };
-  for (const [key, value] of Object.entries(newData)) {
-    if (value !== null && value !== undefined) {
-      merged[key] = value;
-    }
+export function detectUserInput(text) {
+  const data = {};
+  const clean = text.replace(/\*/g, '').replace(/\r/g, '').toLowerCase().trim();
+
+  const medMatch = clean.match(/(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)\s*[x×*]\s*(\d+(?:\.\d+)?)/);
+  if (medMatch) {
+    data.medidas = `${medMatch[1]}x${medMatch[2]}x${medMatch[3]}`;
+    data.largo = parseFloat(medMatch[1]);
+    data.ancho = parseFloat(medMatch[2]);
+    data.alto = parseFloat(medMatch[3]);
   }
-  return merged;
-}
 
-export function getMissingFields(data) {
-  const requiredFields = ['cp_origen', 'cp_destino', 'medidas', 'peso', 'largo'];
-  return requiredFields.filter(f => !data[f]);
-}
+  const pesoMatch = clean.match(/(\d+(?:\.\d+)?)\s*kg/i) || clean.match(/peso\s*(?:de|:)?\s*(\d+(?:\.\d+)?)/i);
+  if (pesoMatch) {
+    data.peso = parseFloat(pesoMatch[1]);
+  }
 
-// ─────────────────────────────────────────────────────────
-// MENSAJES DE ERROR
-// ─────────────────────────────────────────────────────────
+  const origenMatch = clean.match(/(?:sale|viene|desde|de|orig[en]{2})\s*(?:de|:)?\s*(\d{5})\b/);
+  if (origenMatch) data.cp_origen = origenMatch[1];
+
+  const destinoMatch = clean.match(/(?:al|a|hacia|para|dest[ino]{3})\s*(?:el|:)?\s*(\d{5})\b/);
+  if (destinoMatch) data.cp_destino = destinoMatch[1];
+
+  const allCPs = clean.match(/\b\d{5}\b/g) || [];
+  if (!data.cp_origen && allCPs.length >= 2) {
+    data.cp_origen = allCPs[0];
+    data.cp_destino = allCPs[1];
+  } else if (!data.cp_origen && allCPs.length === 1) {
+    data.cp_origen = allCPs[0];
+  }
+
+  return {
+    hasAnyData: Object.keys(data).length > 0,
+    data,
+  };
+}
 
 export function getMissingFieldMessage(missingFields) {
   const messages = {
-    cp_origen: 'Envíame el *CP de origen* (5 dígitos)',
-    cp_destino: 'Envíame el *CP de destino* (5 dígitos)',
+    cp_origen: '📍 Envíame el *CP de origen* (5 dígitos)',
+    cp_destino: '📍 Envíame el *CP de destino* (5 dígitos)',
     medidas: '📦 Envíame las *medidas* (ej: 60x40x30)',
     peso: '⚖️ Envíame el *peso en kg* (ej: 5 o 5kg)',
+    largo: '📦 Envíame las *medidas completas* (ej: 30x20x15)',
+    cel_origen: '📱 Envíame el *teléfono del remitente*',
+    contenido: '📦 ¿Qué contiene el paquete?',
   };
 
   if (missingFields.length === 1) {
     return messages[missingFields[0]];
   }
 
-  return `Me faltan estos datos:\n\n${missingFields.map(f => '• ' + messages[f]).join('\n')}`;
+  return `Me faltan estos datos:\n\n${missingFields.map(f => '• ' + (messages[f] || f.replace(/_/g, ' '))).join('\n')}`;
 }
 
-// ─────────────────────────────────────────────────────────
-// PARSERS DE OTROS ESTADOS
-// ─────────────────────────────────────────────────────────
+export function getMissingFields(data) {
+  const requiredFields = [
+    'cp_origen',
+    'cp_destino',
+    'medidas',
+    'peso'
+  ];
+
+  return requiredFields.filter(f => !data[f]);
+}
 
 const SI_KEYWORDS = /^(s[ií]|yes|1|sí|si|claro|ok|dale|afirmativo)/i;
 const NO_KEYWORDS = /^(no|2|nope|nel|negativo)/i;
@@ -549,17 +598,13 @@ export function parseCarrierSelection(text) {
 export function parseFlexibleInput(text) {
   const t = text.replace(/\*/g, '').replace(/\r/g, '').trim();
   const norm = normalize(t);
-
   const data = {};
 
-  // ── Intentar formato libre primero ────────────────────────
   if (isFormatoLibre(t)) {
     const libreData = parseFormatoLibre(t);
     Object.assign(data, libreData);
-    return data;
   }
 
-  // ── MEDIDAS ───────────────────────────────────────────────
   const medidasMatch = norm.match(/([\d.]+\s*[x×*]\s*[\d.]+\s*[x×*]\s*[\d.]+)/i);
   if (medidasMatch) {
     const medidas = medidasMatch[1].replace(/\s/g, '');
@@ -572,7 +617,6 @@ export function parseFlexibleInput(text) {
     }
   }
 
-  // ── PESO ──────────────────────────────────────────────────
   let pesoMatch =
     norm.match(/(\d+(\.\d+)?)\s*kg/) ||
     norm.match(/pesa\s*(\d+(\.\d+)?)/) ||
@@ -596,26 +640,59 @@ export function parseFlexibleInput(text) {
     if (peso > 0 && peso <= 1000) data.peso = peso;
   }
 
-  // ── CPs ───────────────────────────────────────────────────
-  const cpOrigen = norm.match(/cp\s*origen\s*:?[\s]*(\d{5})/) ||
+  let cpOrigen = null;
+  let cpDestino = null;
+
+  const explicitOrigen =
+    norm.match(/cp\s*origen\s*:?[\s]*(\d{5})/) ||
     norm.match(/origen.*?(\d{5})/);
-  if (cpOrigen) data.cp_origen = cpOrigen[1];
 
-  const cpDestino = norm.match(/cp\s*destino\s*:?[\s]*(\d{5})/) ||
+  if (explicitOrigen) cpOrigen = explicitOrigen[1];
+
+  const explicitDestino =
+    norm.match(/cp\s*destino\s*:?[\s]*(\d{5})/) ||
     norm.match(/destino.*?(\d{5})/);
-  if (cpDestino) data.cp_destino = cpDestino[1];
 
-  return data;
-}
+  if (explicitDestino) cpDestino = explicitDestino[1];
 
-export function detectUserInput(text) {
-  const parsed = parseFlexibleInput(text);
-  return {
-    hasMedidas: !!parsed.medidas,
-    hasPeso: !!parsed.peso,
-    hasCpOrigen: !!parsed.cp_origen,
-    hasCpDestino: !!parsed.cp_destino,
-    hasAnyData: Object.keys(parsed).length > 0,
-    data: parsed,
-  };
+  const cpMatches = [...norm.matchAll(/codigo\s*postal\s*(\d{5})/g)];
+
+  if (cpMatches.length >= 2) {
+    cpOrigen = cpOrigen || cpMatches[0][1];
+    cpDestino = cpDestino || cpMatches[1][1];
+  }
+  let match = norm.match(/de\s*(\d{5})\s*(?:a|hasta)\s*(\d{5})/);
+  if (match) {
+    cpOrigen = cpOrigen || match[1];
+    cpDestino = cpDestino || match[2];
+  }
+
+  match = norm.match(/(?:envio|enviar|mandar).*?de\s*(\d{5}).*?(?:a|para)\s*(\d{5})/);
+  if (match) {
+    cpOrigen = cpOrigen || match[1];
+    cpDestino = cpDestino || match[2];
+  }
+
+  match = norm.match(/\b(\d{5})\s*(?:a|->|hasta)\s*(\d{5})\b/);
+  if (match) {
+    cpOrigen = cpOrigen || match[1];
+    cpDestino = cpDestino || match[2];
+  }
+
+  if (!cpOrigen || !cpDestino) {
+    const allCPs = norm.match(/\b\d{5}\b/g);
+
+    if (allCPs && allCPs.length >= 2) {
+      if (!cpOrigen) cpOrigen = allCPs[0];
+      if (!cpDestino) cpDestino = allCPs[1];
+    }
+  }
+
+  if (cpOrigen) data.cp_origen = cpOrigen;
+  if (cpDestino) data.cp_destino = cpDestino;
+
+  const loose = detectLooseNumbers(text);
+  const finalData = mergeFormData(data, loose);
+
+  return finalData;
 }

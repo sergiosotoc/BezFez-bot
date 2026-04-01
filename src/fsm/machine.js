@@ -9,14 +9,6 @@ import { handleAwaitingPayment } from './states/s5_payment.js';
 import { handlePaused } from './states/s6_paused.js';
 import { logger } from '../config/logger.js';
 
-/**
- * Dispatcher principal de la FSM.
- *
- * Estados:
- *   IDLE → AWAITING_FORMAT → AWAITING_INVOICE → AWAITING_SELECTION
- *        → AWAITING_ADDRESS (si faltan datos del formulario)
- *        → AWAITING_PAYMENT → PAUSED
- */
 export async function dispatch(ctx) {
   const { chatId } = ctx;
 

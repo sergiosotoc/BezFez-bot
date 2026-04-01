@@ -4,13 +4,11 @@ import { JWT } from 'google-auth-library';
 import { config } from '../config/index.js';
 import { logger } from '../config/logger.js';
 
-// ── Caché en memoria ──────────────────────────────────────
 let cache = {
-  tarifas: null,   // Array de filas ordenadas por peso ascendente
+  tarifas: null,  
   lastFetched: 0,
 };
 
-// ── Autenticación JWT (igual que tu código original) ─────
 function buildAuth() {
   return new JWT({
     email: config.google.clientEmail,
@@ -19,17 +17,6 @@ function buildAuth() {
   });
 }
 
-/**
- * Estructura esperada en Google Sheets (primera pestaña, sheetsByIndex[0]):
- *
- *   Col A: Peso máximo (kg)
- *   Col B: Estafeta Express    (sin IVA)
- *   Col C: Estafeta Express    (con IVA)
- *   Col D: Estafeta Terrestre  (sin IVA)
- *   Col E: Estafeta Terrestre  (con IVA)
- *   Col F: FedEx Terrestre     (sin IVA)
- *   Col G: FedEx Terrestre     (con IVA)
- */
 async function fetchFromSheets() {
   const auth = buildAuth();
   const doc = new GoogleSpreadsheet(config.google.sheetId, auth);
@@ -68,13 +55,6 @@ async function fetchFromSheets() {
   return tarifas;
 }
 
-/**
- * Obtiene las tarifas con caché de 10 minutos.
- * Fallback: si Sheets falla pero hay caché previa, la usa con advertencia.
- * Sin caché: lanza el error para que el llamador notifique al admin.
- *
- * @returns {Promise<Array>}
- */
 export async function getTarifas() {
   const now = Date.now();
   const cacheValid = cache.tarifas && (now - cache.lastFetched) < config.sheetCacheTtlMs;
@@ -95,15 +75,6 @@ export async function getTarifas() {
   }
 }
 
-/**
- * Devuelve los precios para el peso facturable dado.
- * Busca la primera fila cuyo peso >= pesoFacturable.
- * Si el peso supera todos los rangos, usa la última fila.
- *
- * @param {number} pesoFacturable
- * @param {boolean} conIVA
- * @returns {Promise<{estafeta_express, estafeta_terrestre, fedex_terrestre}>}
- */
 export async function getPreciosPorPeso(pesoFacturable, conIVA) {
   const tarifas = await getTarifas();
   const fila = tarifas.find(t => t.peso >= pesoFacturable) ?? tarifas[tarifas.length - 1];

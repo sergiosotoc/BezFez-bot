@@ -20,16 +20,13 @@ import { logger } from '../config/logger.js';
 const AUTH_DIR = './auth_info';
 
 export async function startBot() {
-  // ── Pre-flight checks ──────────────────────────────────
   await ensureBucketExists();
   logger.info('Bucket de Supabase Storage verificado');
 
-  // ── Autenticación multi-archivo (persistente) ──────────
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
   logger.info({ version }, 'Baileys version');
 
-  // ── Socket de WhatsApp ─────────────────────────────────
   const sock = makeWASocket({
     version,
     auth: {
@@ -38,39 +35,43 @@ export async function startBot() {
     },
     printQRInTerminal: false,
     logger: pino({ level: 'silent' }),
-    browser: ['AHSE Bot', 'Chrome', '1.0.0'],
+    browser: ['BazFez Bot', 'Chrome', '1.0.0'],
     syncFullHistory: false,
     markOnlineOnConnect: false,
   });
 
   const sender = new Sender(sock);
 
-  // 🔥🔥🔥 NUEVO: Resolver LID → teléfono real
   sock.ev.on('chats.phoneNumberShare', ({ lid, jid }) => {
     try {
-      const lidKey = String(lid || '');
+      if (!lid || !jid) return;
+
+      const lidKey = String(lid);
       const lidUser = lidKey.replace('@lid', '');
-      const telefonoReal = jid?.replace('@s.whatsapp.net', '');
 
-      if (!lidKey || !telefonoReal) return;
+      const phone = jid.replace('@s.whatsapp.net', '');
 
-      // Guardar ambas variantes
-      lidToPhoneMap.set(lidKey, telefonoReal);
-      lidToPhoneMap.set(lidUser, telefonoReal);
+      if (!/^\d{10,15}$/.test(phone)) return;
+
+      lidToPhoneMap.set(lidKey, phone);
+      lidToPhoneMap.set(lidUser, phone);
+      lidToPhoneMap.set(`${lidUser}@lid`, phone);
 
       logger.info(
-        { lid: lidKey, phone: telefonoReal },
-        'LID resuelto a teléfono real'
+        { lid: lidKey, phone },
+        '✅ LID → teléfono resuelto correctamente'
       );
     } catch (err) {
       logger.warn({ err: err.message }, 'Error en phoneNumberShare');
     }
   });
 
-  // Inyectar sender en deadman
+  sock.ev.on('chats.phoneNumberShare', (data) => {
+    console.log('🔥 phoneNumberShare:', data);
+  });
+
   injectSender(sender);
 
-  // ── Eventos de conexión ────────────────────────────────
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
@@ -104,21 +105,18 @@ export async function startBot() {
     }
   });
 
-  // ── Guardar credenciales ───────────────────────────────
   sock.ev.on('creds.update', saveCreds);
 
-  // ── Recepción de mensajes ──────────────────────────────
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
 
     for (const rawMessage of messages) {
-      route(rawMessage, sender).catch(err => {
+      route(rawMessage, sender, sock).catch(err => {
         logger.error({ err: err.message }, 'Error no capturado en route()');
       });
     }
   });
 
-  // ── Limpieza periódica ─────────────────────────────────
   setInterval(() => {
     cleanExpiredMessages().catch(err => {
       logger.warn({ err: err.message }, 'Error en limpieza de processed_messages');

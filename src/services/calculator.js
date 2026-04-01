@@ -1,17 +1,11 @@
-/* src/services/calculator.js */
 import { config } from '../config/index.js';
 import { getPreciosPorPeso } from './sheets.js';
 
-/**
- * Calcula el peso facturable según la regla de peso volumétrico estándar.
- * Peso facturable = max(peso_bascula, L×A×A / 5000)
- * Si alguna dimensión > 100 cm → cargo adicional de $175
- */
 export function calcBillableWeight({ largo, ancho, alto, peso }) {
   const pesoVolumetrico = (largo * ancho * alto) / 5000;
-  const pesoFacturable  = Math.max(peso, pesoVolumetrico);
-  const oversize        = Math.max(largo, ancho, alto) > config.oversizeThreshold;
-  const cargoExtra      = oversize ? config.oversizeCharge : 0;
+  const pesoFacturable = Math.max(peso, pesoVolumetrico);
+  const oversize = Math.max(largo, ancho, alto) > config.oversizeThreshold;
+  const cargoExtra = oversize ? config.oversizeCharge : 0;
 
   return {
     pesoFacturable: Math.ceil(pesoFacturable * 100) / 100,
@@ -25,25 +19,25 @@ export function applyIVA(base, requiereFactura) {
   return Math.ceil(base * (1 + config.iva) * 100) / 100;
 }
 
-/**
- * Construye las 3 opciones de cotización.
- * Los precios ya vienen con/sin IVA desde Sheets — solo suma el cargo extra.
- */
 export async function buildQuotes({ pesoFacturable, cargoExtra }, invoice) {
   const precios = await getPreciosPorPeso(pesoFacturable, invoice);
 
   const carriers = [
-    { id: 1, 
-      label: 'Estafeta Express',   
-      basePrice: precios.estafeta_express   
+    {
+      id: 1,
+      label: 'Estafeta Express',
+      basePrice:
+        precios.estafeta_express
     },
-    { id: 2, 
+    {
+      id: 2,
       label: 'Estafeta Terrestre',
-       basePrice: precios.estafeta_terrestre 
-      },
-    { id: 3, 
-      label: 'FedEx Terrestre',    
-      basePrice: precios.fedex_terrestre    
+      basePrice: precios.estafeta_terrestre
+    },
+    {
+      id: 3,
+      label: 'FedEx Terrestre',
+      basePrice: precios.fedex_terrestre
     },
   ];
 
@@ -55,7 +49,12 @@ export async function buildQuotes({ pesoFacturable, cargoExtra }, invoice) {
   }));
 }
 
-export function formatQuoteMessage({ pesoFacturable, oversize, invoice, quotes }) {
+export function formatQuoteMessage({
+  pesoFacturable,
+  oversize,
+  invoice,
+  quotes
+}) {
   const lines = [
     '*COTIZACIÓN*',
     `Peso facturable: ${pesoFacturable}kg`,
@@ -97,49 +96,56 @@ export function formatPaymentMessage(folio, amount) {
   ].join('\n');
 }
 
-/**
- * Resumen completo para el encargado.
- *
- * El chatId en cuentas nuevas de WhatsApp llega como hash@lid (identificador
- * interno) en lugar del número real. Usamos cel_origen del formulario como
- * fuente confiable del teléfono del cliente.
- */
-export function formatAdminSummary({ folio, carrier, total, clientJid, clientPhone, formData, calc, invoice }) {
-  const rawJid = clientJid
-    .replace('@s.whatsapp.net', '')
-    .replace('@lid', '');
- 
-  const phoneIsNumber = clientPhone && /^\d{10,15}$/.test(clientPhone);
-  const phone = phoneIsNumber
-    ? clientPhone
-    : (formData?.cel_origen || clientPhone || rawJid);
- 
-  // ── Link de WhatsApp al chat del cliente ─────────────────
-  // Si el teléfono es un número válido, construir el link wa.me.
-  // Agrega el código de país 52 (México) si el número tiene 10 dígitos.
+
+export function formatAdminSummary({
+  folio,
+  carrier,
+  total,
+  clientJid,
+  clientPhone,
+  pushName,
+  formData,
+  calc,
+  invoice
+}) {
+  const rawJid = clientJid.replace('@s.whatsapp.net', '').replace('@lid', '');
+  const isRealPhone = /^\d{10,15}$/.test(clientPhone);
+
+  let phone = null;
+  if (isRealPhone) {
+    phone = clientPhone;
+  } else if (clientPhone?.startsWith('lid:')) {
+    phone = `⚠️ No resuelto (${clientPhone})`;
+  } else {
+    phone = rawJid;
+  }
+
   let waLink = null;
   if (/^\d{10,15}$/.test(phone)) {
     const fullNumber = phone.length === 10 ? `52${phone}` : phone;
     waLink = `https://wa.me/${fullNumber}`;
   }
- 
+
   const {
-    nombre_origen, 
-    calle_origen, 
-    colonia_origen, 
-    ciudad_origen, 
-    cp_origen, 
+    nombre_origen,
+    calle_origen,
+    colonia_origen,
+    ciudad_origen,
+    cp_origen,
     cel_origen,
-    nombre_destino, 
-    calle_destino, 
-    colonia_destino, 
-    ciudad_destino, 
-    cp_destino, 
+    nombre_destino,
+    calle_destino,
+    colonia_destino,
+    ciudad_destino,
+    cp_destino,
     cel_destino,
-    medidas, peso, 
+    medidas,
+    peso,
     contenido,
   } = formData;
- 
+
+  const clienteLabel = pushName || 'Cliente WhatsApp';
+
   const lines = [
     '*COMPROBANTE RECIBIDO*',
     '',
@@ -147,7 +153,7 @@ export function formatAdminSummary({ folio, carrier, total, clientJid, clientPho
     `*SERVICIO:* ${carrier}`,
     `*TOTAL:* $${total}`,
     '',
-    `*CLIENTE:* ${nombre_origen || 'N/A'}`,
+    `*CLIENTE:* ${clienteLabel}`,
     `*TELÉFONO:* ${phone}`,
     '',
     '*COTIZACIÓN*',
@@ -178,11 +184,10 @@ export function formatAdminSummary({ folio, carrier, total, clientJid, clientPho
     '',
     'Adjunto comprobante enviado por el cliente.',
     '',
-    // ── Link directo al chat del cliente ──────────────────
     waLink
       ? `📲 *Enviar guía al cliente:*\n${waLink}`
       : `📲 *Chat cliente:* ${clientJid}`,
   ];
- 
+
   return lines.join('\n');
 }

@@ -5,16 +5,6 @@ import { logger } from '../config/logger.js';
 
 const BUCKET = 'comprobantes';
 
-/**
- * Sube un buffer de archivo a Supabase Storage con reintentos exponenciales.
- *
- * Retries: 3 intentos con backoff 1s → 2s → 4s antes de lanzar el error.
- *
- * @param {Buffer} buffer     - Contenido del archivo
- * @param {string} folio      - PED-XXXXXX (usado en el path)
- * @param {string} mimeType   - 'image/jpeg', 'application/pdf', etc.
- * @returns {Promise<string>} - URL pública del archivo subido
- */
 export async function uploadComprobante(buffer, folio, mimeType) {
   const ext      = mimeTypeToExt(mimeType);
   const path     = `${folio}/${Date.now()}.${ext}`;
@@ -52,10 +42,6 @@ export async function uploadComprobante(buffer, folio, mimeType) {
   throw lastError;
 }
 
-/**
- * Asegura que el bucket exista (ejecutar al inicializar el bot).
- * Supabase Storage no crea buckets automáticamente.
- */
 export async function ensureBucketExists() {
   const { data: buckets, error } = await supabase.storage.listBuckets();
   if (error) throw error;

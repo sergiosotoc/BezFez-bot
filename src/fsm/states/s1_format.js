@@ -1,6 +1,6 @@
 /* src/fsm/states/s1_format.js */
 import { updateSession } from '../../services/supabase.js';
-import { parseFlexibleInput, getMissingFields, getMissingFieldMessage } from '../../parsers/formParser.js';
+import { parseFlexibleInput, getMissingFields, getMissingFieldMessage, detectUserInput } from '../../parsers/formParser.js';
 
 // ─────────────────────────────────────────────────────────
 // MENSAJES
@@ -46,32 +46,36 @@ export async function handleIdle(ctx) {
   const { chatId, messageType, text, sender } = ctx;
 
   if (messageType !== 'text') {
-    await sender.sendText(chatId, ERROR_NON_TEXT);
+    await sender.sendText(chatId, 'Por ahora solo puedo procesar texto 😊');
     return;
   }
 
+  // 1. Intentar detectar datos de inmediato (Incluso en el primer mensaje)
+  const detection = detectUserInput(text);
   const parsed = parseFlexibleInput(text);
+  const combined = { ...parsed, ...detection.data };
 
-  if (Object.keys(parsed).length > 0) {
-    const missing = getMissingFields(parsed);
+  // 2. Si tiene ALGO de datos (medidas, CP o peso), inicializamos la sesión con eso
+  if (Object.keys(combined).length > 0) {
+    const missing = getMissingFields(combined);
+    
+    // Si están completos, vamos a factura. Si no, a PARSING_DATA para pedir el resto.
+    const nextState = (missing.length === 0) ? 'AWAITING_INVOICE' : 'AWAITING_FORMAT';
 
     await updateSession(chatId, {
-      state: 'AWAITING_INVOICE',
-      form_data: parsed,
+      state: nextState,
+      form_data: combined,
     });
 
     if (missing.length === 0) {
-      await sender.sendText(
-        chatId,
-        '¡Perfecto! Ya tengo todos los datos del paquete 📦\n\n¿Necesitas *factura* (con IVA)?\n1️⃣ Sí\n2️⃣ No'
-      );
-      return;
+      await sender.sendText(chatId, '¡Perfecto! Ya tengo todos los datos del paquete 📦\n\n¿Necesitas *factura* (con IVA)?\n1️⃣ Sí\n2️⃣ No');
+    } else {
+      await sender.sendText(chatId, getMissingFieldMessage(missing));
     }
-
-    await sender.sendText(chatId, getMissingFieldMessage(missing));
     return;
   }
 
+  // 3. Si no detectó nada (solo dijo "hola"), mandar bienvenida normal
   await sender.sendText(chatId, WELCOME_MESSAGE);
 }
 
