@@ -245,13 +245,14 @@ export function parseFormatoLibre(text) {
   if (lastLine) {
     const n = normalize(lastLine);
     const isHeader = /remitente|receptor|destinatario|destino|origen|contenido|paquete/i.test(n);
-    const isPhone = /^\+?[\d\s\-()]{7,}$/.test(lastLine.replace(/\s/g, '').replace(/[^\d]/g, '').length >= 7 ? lastLine : '');
+    const isPhone = /^\+?\d{7,15}$/.test(lastLine.replace(/\D/g, '')); // Teléfono válido
     const isCP = /^\d{5}$/.test(lastLine.trim());
     const isDims = /\d+\s*[x×]\s*\d+/.test(lastLine);
     const isCel = /^(cel|tel|whatsapp)/i.test(n);
+    const hasLetters = /[a-zA-Z]/.test(lastLine);
 
-    if (!isHeader && !isCP && !isDims && !isCel && lastLine.length >= 3) {
-      // Verificar que no sea un teléfono puro
+    if (!isHeader && !isCP && !isDims && !isCel && !isPhone && hasLetters && lastLine.length >= 3) {
+      // Verificar que no sea un teléfono puro ni parte de los bloques ya parseados
       const digitsOnly = lastLine.replace(/[^0-9]/g, '');
       if (digitsOnly.length < 7) {
         data.contenido = lastLine;
@@ -320,12 +321,12 @@ export function parseFormatoLibre(text) {
     const lastLine = lines[lines.length - 1];
     const norm = normalize(lastLine);
     const isHeader = /remitente|receptor|destinatario|destino|origen|contenido/i.test(norm);
-    const isPhone = /^\d{7,}$/.test(lastLine.replace(/\s/g, ''));
+    const isPhone = /^\+?\d{7,15}$/.test(lastLine.replace(/\D/g, ''));
     const isCP = /^\d{5}$/.test(lastLine.trim());
     const isDimensions = /\d+\s*[x×]\s*\d+/.test(lastLine);
+    const hasLetters = /[a-zA-Z]/.test(lastLine);
 
-    if (!isHeader && !isPhone && !isCP && !isDimensions && lastLine.length >= 3) {
-      // Verificar que no sea parte de los bloques origen/destino ya parseados
+    if (!isHeader && !isPhone && !isCP && !isDimensions && hasLetters && lastLine.length >= 3) {
       const isKnownData = [
         data.nombre_origen, data.calle_origen, data.colonia_origen,
         data.ciudad_origen, data.cel_origen,
@@ -341,6 +342,7 @@ export function parseFormatoLibre(text) {
 
   return data;
 }
+
 
 export function parseForm(text) {
   const t = text.replace(/\*/g, '').replace(/\r/g, '');

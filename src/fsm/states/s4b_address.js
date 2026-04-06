@@ -21,11 +21,22 @@ function getMissingFields(formData) {
   return REQUIRED_FIELDS.filter(f => {
     const val = formData[f];
     if (!val) return true;
+
     const strVal = String(val).trim();
-    if (f.startsWith('cel_')) return strVal.length < 10;
+
+    if (f.startsWith('cel_')) {
+      return !/^\d{10}$/.test(strVal);
+    }
+
+    if (f === 'contenido') {
+      const hasLetters = /[a-zA-Z]/.test(strVal);
+      return strVal.length < 2 || !hasLetters;
+    }
+
     return strVal.length < 2;
   });
 }
+
 
 function cleanPhone(value) {
   if (!value) return null;
