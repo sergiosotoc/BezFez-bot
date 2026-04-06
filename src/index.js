@@ -1,10 +1,13 @@
 /* src/index.js */
 import { startBot } from './bot/index.js';
+import { startServer, startKeepAlive } from './server.js';
 import { logger } from './config/logger.js';
-
 import './config/index.js';
 
 logger.info('Iniciando BazFez Bot...');
+
+startServer();
+startKeepAlive(process.env.RENDER_EXTERNAL_URL);
 
 startBot().catch(err => {
   logger.fatal({ err: err.message, stack: err.stack }, 'Error fatal al iniciar el bot');

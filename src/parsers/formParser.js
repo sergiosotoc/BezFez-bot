@@ -122,7 +122,7 @@ function detectLooseNumbers(text) {
 
 function isFormatoLibre(text) {
   const norm = normalize(text);
-  return /remitente|destinatario|envia|envia desde|envia a/i.test(norm);
+  return /remitente|destinatario|receptor|recibe|envia|envia desde|envia a/i.test(norm);
 }
 
 function extractBlock(text, startPattern, endPattern) {
@@ -145,112 +145,129 @@ function parsePersonBlock(block) {
   const data = {};
   const norm = (s) => normalize(s);
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  // ── Primero: extraer líneas con etiqueta explícita ──────────────
+  const untagged = [];
+
+  for (const line of lines) {
     const n = norm(line);
 
-    if (/^(remitente|destinatario|envia|datos\s+de)/.test(n)) continue;
+    // Saltar encabezados de bloque
+    if (/^(remitente|destinatario|receptor|envia|datos\s+de)/.test(n)) continue;
 
-
+    // CP etiquetado
     const cpMatch = n.match(/\bc\.?\s*p\.?\s*[:\s]\s*(\d{5})\b/) ||
       n.match(/\bcp\s*[:\s]\s*(\d{5})\b/) ||
-      line.match(/\b(\d{5})\b/);
-    if (cpMatch && !data.cp) {
-      data.cp = cpMatch[1];
-      continue;
-    }
+      n.match(/\bc\.?\s*p\.?\s+(\d{5})\b/);
+    if (cpMatch) { data.cp = cpMatch[1]; continue; }
 
+    // Teléfono etiquetado
     const telMatch = n.match(/(?:cel(?:ular)?|tel(?:e?fono)?|whatsapp)\s*\.?\s*[:\s]\s*([\d\s\-+()]{7,})/);
-    if (telMatch && !data.cel) {
+    if (telMatch) {
       const phone = normalizePhone(telMatch[1]);
-
-      if (phone) {
-        data.cel = phone;
-      } else {
-        data.invalid_phone = true;
-      }
-
+      if (phone) { data.cel = phone; } else { data.invalid_phone = true; }
       continue;
     }
 
+    // Colonia etiquetada
+    const colMatch = line.match(/^col(?:onia)?\.?\s+(.+)/i) ||
+      line.match(/^col(?:onia)?\s*:\s*(.+)/i);
+    if (colMatch) { data.colonia = colMatch[1].trim(); continue; }
+
+    // Calle etiquetada
+    const calleMatch = line.match(/^calle\s*[:\s]\s*(.+)/i);
+    if (calleMatch) { data.calle = calleMatch[1].trim(); continue; }
+
+    // Teléfono suelto (solo dígitos)
     const soloNumeros = line.replace(/[\s\-()]/g, '');
     if (/^\+?[\d]{10,15}$/.test(soloNumeros) && !data.cel) {
       const phone = normalizePhone(soloNumeros);
-
-      if (phone) {
-        data.cel = phone;
-      } else {
-        data.invalid_phone = true;
-      }
-
+      if (phone) { data.cel = phone; } else { data.invalid_phone = true; }
       continue;
     }
 
-    const colMatch = line.match(/^col(?:onia)?\.?\s+(.+)/i);
-    if (colMatch && !data.colonia) {
-      data.colonia = colMatch[1].trim();
+    // CP suelto de 5 dígitos
+    if (/^\d{5}$/.test(line.trim()) && !data.cp) {
+      data.cp = line.trim();
       continue;
     }
 
-
-    const calleMatch = line.match(/^calle\s*[:\s]\s*(.+)/i);
-    if (calleMatch && !data.calle) {
-      data.calle = calleMatch[1].trim();
-      continue;
-    }
-
-    if (!data.calle && /(#\d|no\.?\s*\d|num\.?\s*\d|\d+(,|\s|$))/i.test(line) && !data.cp) {
-      data.calle = line.trim();
-      continue;
-    }
-
-    if (!data.ciudad && !data.cp &&
-      /[a-záéíóúüñ]{3,}/i.test(line) &&
-      !/^col/i.test(line) &&
-      !/^calle/i.test(line) &&
-      !/(?:cel|tel|whatsapp)/i.test(n) &&
-      line.split(/\s+/).length >= 2 &&
-      !/\d{5}/.test(line)) {
-      if (data.nombre) {
-        data.ciudad = line.trim();
-        continue;
-      }
-    }
-
-    if (!data.nombre &&
-      /[a-záéíóúüñ]{2,}/i.test(line) &&
-      !/^col/i.test(line) &&
-      !/^calle/i.test(line) &&
-      !/(?:cel|tel|whatsapp)/i.test(n) &&
-      !/\d{5}/.test(line)) {
-      data.nombre = line.trim();
-      continue;
-    }
-
-    if (!data.ciudad &&
-      /[a-záéíóúüñ]{3,}/i.test(line) &&
-      line.split(/\s+/).length >= 2 &&
-      !/\d{5}/.test(line) &&
-      !/(?:cel|tel|whatsapp)/i.test(n)) {
-      data.ciudad = line.trim();
-    }
-
+    // Sin etiqueta → acumular para asignación posicional
+    untagged.push(line.trim());
   }
+
+  const posQueue = [...untagged];
+
+  // nombre: primera línea sin número
+  if (!data.nombre && posQueue.length > 0) {
+    data.nombre = posQueue.shift();
+  }
+
+  // calle: primera línea con número
+  if (!data.calle && posQueue.length > 0) {
+    const calleIdx = posQueue.findIndex(l =>
+      /(#\d|no\.?\s*\d|num\.?\s*\d|\d)/i.test(l)
+    );
+    if (calleIdx !== -1) {
+      data.calle = posQueue.splice(calleIdx, 1)[0];
+    }
+  }
+
+  // ciudad: línea con coma O la última línea de 2+ palabras
+  if (!data.ciudad && posQueue.length > 0) {
+    const ciudadIdx = posQueue.findIndex(l => l.includes(','));
+    if (ciudadIdx !== -1) {
+      data.ciudad = posQueue.splice(ciudadIdx, 1)[0];
+    } else {
+      // Buscar línea de 2+ palabras que parezca ciudad (sin dígitos dominantes)
+      const ciudadIdx2 = posQueue.findIndex(l => {
+        const words = l.split(/\s+/);
+        return words.length >= 2 && !/^\d/.test(l) && !/\d{4,}/.test(l);
+      });
+      if (ciudadIdx2 !== -1) {
+        data.ciudad = posQueue.splice(ciudadIdx2, 1)[0];
+      }
+    }
+  }
+
+  // colonia: lo que quede
+  if (!data.colonia && posQueue.length > 0) {
+    data.colonia = posQueue.shift();
+  }
+
   return data;
 }
 
 export function parseFormatoLibre(text) {
   const data = {};
 
+  const allLines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  const lastLine = allLines[allLines.length - 1];
+  if (lastLine) {
+    const n = normalize(lastLine);
+    const isHeader = /remitente|receptor|destinatario|destino|origen|contenido|paquete/i.test(n);
+    const isPhone = /^\+?[\d\s\-()]{7,}$/.test(lastLine.replace(/\s/g, '').replace(/[^\d]/g, '').length >= 7 ? lastLine : '');
+    const isCP = /^\d{5}$/.test(lastLine.trim());
+    const isDims = /\d+\s*[x×]\s*\d+/.test(lastLine);
+    const isCel = /^(cel|tel|whatsapp)/i.test(n);
+
+    if (!isHeader && !isCP && !isDims && !isCel && lastLine.length >= 3) {
+      // Verificar que no sea un teléfono puro
+      const digitsOnly = lastLine.replace(/[^0-9]/g, '');
+      if (digitsOnly.length < 7) {
+        data.contenido = lastLine;
+      }
+    }
+  }
+
   const origenBlock = extractBlock(
     text,
     /remitente|envia(nte)?|origen/i,
-    /destinatario|destino|recibe/i
+    /destinatario|destino|recibe|receptor/i
   );
 
   const destinoBlock = extractBlock(
     text,
-    /destinatario|destino|recibe/i,
+    /destinatario|destino|recibe|receptor/i,
     /medidas|peso|contenido|paquete/i
   );
 
@@ -295,7 +312,32 @@ export function parseFormatoLibre(text) {
   }
 
   const contenidoMatch = text.match(/contenido\s*[:\s]\s*(.+)/i);
-  if (contenidoMatch) data.contenido = contenidoMatch[1].trim();
+  if (contenidoMatch) {
+    data.contenido = contenidoMatch[1].trim();
+  } else {
+    // Detectar última línea suelta como contenido (sin etiqueta)
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const lastLine = lines[lines.length - 1];
+    const norm = normalize(lastLine);
+    const isHeader = /remitente|receptor|destinatario|destino|origen|contenido/i.test(norm);
+    const isPhone = /^\d{7,}$/.test(lastLine.replace(/\s/g, ''));
+    const isCP = /^\d{5}$/.test(lastLine.trim());
+    const isDimensions = /\d+\s*[x×]\s*\d+/.test(lastLine);
+
+    if (!isHeader && !isPhone && !isCP && !isDimensions && lastLine.length >= 3) {
+      // Verificar que no sea parte de los bloques origen/destino ya parseados
+      const isKnownData = [
+        data.nombre_origen, data.calle_origen, data.colonia_origen,
+        data.ciudad_origen, data.cel_origen,
+        data.nombre_destino, data.calle_destino, data.colonia_destino,
+        data.ciudad_destino, data.cel_destino,
+      ].some(v => v && normalize(v) === norm);
+
+      if (!isKnownData) {
+        data.contenido = lastLine;
+      }
+    }
+  }
 
   return data;
 }

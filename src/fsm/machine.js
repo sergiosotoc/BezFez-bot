@@ -1,16 +1,22 @@
 /* src/fsm/machine.js */
-import { getOrCreateSession } from '../services/supabase.js';
+import { getOrCreateSession, resetSession, isSessionExpired } from '../services/supabase.js';
 import { handleIdle, handleAwaitingFormat } from './states/s1_format.js';
 import { handleParsingData } from './states/s2_parsing.js';
 import { handleAwaitingInvoice } from './states/s3_invoice.js';
 import { handleAwaitingSelection } from './states/s4_selection.js';
-import { handleAwaitingAddress } from './states/s4b_address.js';   // ← NUEVO
+import { handleAwaitingAddress } from './states/s4b_address.js';
 import { handleAwaitingPayment } from './states/s5_payment.js';
 import { handlePaused } from './states/s6_paused.js';
 import { logger } from '../config/logger.js';
 
 export async function dispatch(ctx) {
   const { chatId } = ctx;
+
+  const expired = await isSessionExpired(chatId);
+  if (expired) {
+    logger.info({ chatId }, 'Sesión expirada por inactividad — reseteando');
+    await resetSession(chatId);
+  }
 
   const session = await getOrCreateSession(chatId);
   ctx.session = session;

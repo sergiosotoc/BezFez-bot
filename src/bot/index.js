@@ -16,12 +16,16 @@ import { injectSender, restoreTimers } from '../services/deadman.js';
 import { cleanExpiredMessages } from '../services/supabase.js';
 import { ensureBucketExists } from '../services/storage.js';
 import { logger } from '../config/logger.js';
+import { ensureAuthBucket, downloadAuthFromSupabase, uploadAuthToSupabase } from './auth.js';
 
 const AUTH_DIR = './auth_info';
 
 export async function startBot() {
   await ensureBucketExists();
   logger.info('Bucket de Supabase Storage verificado');
+
+  await ensureAuthBucket();
+  await downloadAuthFromSupabase();
 
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
@@ -105,7 +109,10 @@ export async function startBot() {
     }
   });
 
-  sock.ev.on('creds.update', saveCreds);
+  sock.ev.on('creds.update', async () => {
+    await saveCreds();
+    await uploadAuthToSupabase();
+  });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;

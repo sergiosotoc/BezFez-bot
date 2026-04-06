@@ -89,9 +89,17 @@ export async function handleAwaitingAddress(ctx) {
 
   let merged = { ...form_data };
 
-  if (text.length > 50) {
+  const lineCount = text.split('\n').filter(l => l.trim()).length;
+  if (text.length > 30 || lineCount >= 3) {
     const { data: parsedFull } = parseForm(text);
-    merged = mergeFormData(merged, parsedFull);
+    // También intentar parseFormatoLibre directamente para formatos alternativos
+    if (Object.keys(parsedFull).filter(k => parsedFull[k]).length < 3) {
+      const { parseFormatoLibre } = await import('../../parsers/formParser.js');
+      const libreData = parseFormatoLibre(text);
+      merged = mergeFormData(merged, libreData);
+    } else {
+      merged = mergeFormData(merged, parsedFull);
+    }
   } else {
     const missingBefore = getMissingFields(merged);
     const fieldToFill = missingBefore[0];

@@ -156,3 +156,17 @@ export async function recordPauseExtension(chatId, newExpiresAt) {
 
   if (error) logger.warn({ err: error }, 'Error guardando extensión de pausa');
 }
+
+export async function isSessionExpired(chatId, ttlMs = 60 * 60 * 1000) {
+  const { data, error } = await supabase
+    .from('sessions')
+    .select('updated_at, state')
+    .eq('chat_id', chatId)
+    .maybeSingle();
+
+  if (error || !data) return false;
+  if (data.state === 'IDLE' || data.state === 'PAUSED') return false;
+
+  const lastActivity = new Date(data.updated_at).getTime();
+  return (Date.now() - lastActivity) > ttlMs;
+}
