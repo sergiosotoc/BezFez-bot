@@ -1,4 +1,4 @@
-# AHSE Bot — WhatsApp Cotizador de Guías
+# BazFez Bot — WhatsApp Cotizador de Guías
 
 Chatbot de WhatsApp para cotizaciones de guías de envío con 3 paqueterías (Estafeta Express, Estafeta Terrestre, FedEx Terrestre).
 
@@ -27,7 +27,7 @@ Chatbot de WhatsApp para cotizaciones de guías de envío con 3 paqueterías (Es
 
 ```bash
 git clone <repo>
-cd ahse-bot
+cd bazfez-bot
 npm install
 cp .env.example .env
 # Editar .env con tus credenciales
@@ -42,23 +42,16 @@ cp .env.example .env
 1. Crea un proyecto en [supabase.com](https://supabase.com)
 2. Ve a **SQL Editor** y ejecuta el archivo `src/db/migrations/001_initial.sql`
 3. Copia la `URL` y la `service_role` key de **Project Settings → API**
-4. En **Storage**, el bucket `comprobantes` se crea automáticamente al arrancar el bot
+4. En **Storage**, los buckets `comprobantes` y `auth-sessions` se crean automáticamente al arrancar el bot
 
 ### 2. Google Sheets
 
-1. Crea una hoja de cálculo con la siguiente estructura en la pestaña `Tarifas`:
-
-   | A (Paquetería)      | B (Precio Base) | C (Descripción) |
-   |---------------------|-----------------|-----------------|
-   | Estafeta Express    | 720             | Entrega 1-2 días |
-   | Estafeta Terrestre  | 525             | Entrega 3-5 días |
-   | FedEx Terrestre     | 600             | Entrega 3-4 días |
-
+1. Crea una hoja de cálculo con la estructura de tarifas por peso (columnas: peso, express, expressIVA, terrestre, terrestreIVA, fedex, fedexIVA)
 2. Crea una cuenta de servicio en Google Cloud Console:
    - Ve a **IAM & Admin → Service Accounts**
    - Crea cuenta → genera clave JSON
    - Comparte la hoja con el email de la cuenta de servicio (rol Viewer)
-3. El contenido del JSON va en `GOOGLE_SERVICE_ACCOUNT_JSON` (como una sola línea)
+3. Copia el `client_email` y `private_key` del JSON a las variables de entorno correspondientes
 
 ### 3. Variables de entorno
 
@@ -66,19 +59,21 @@ cp .env.example .env
 SUPABASE_URL=https://xxxx.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJ...
 
-GOOGLE_SHEET_ID=1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms
-GOOGLE_SHEET_TAB=Tarifas
-GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
+SHEET_ID=1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms
+GOOGLE_CLIENT_EMAIL=bot@proyecto.iam.gserviceaccount.com
+GOOGLE_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----
 
-ADMIN_PHONE=5216181096537   # Sin + ni espacios
+ADMIN_PHONE=5216181096537
 BANK_NAME=BBVA
 BANK_ACCOUNT=1234567890
 BANK_CLABE=012345678901234567
-BANK_HOLDER=AHSE Paqueteria SA de CV
+BANK_HOLDER=Tu Nombre
 
 IVA_RATE=0.16
 LOG_LEVEL=info
 ```
+
+> **Nota sobre `GOOGLE_PRIVATE_KEY`:** Pégala con los `\n` literales, sin comillas adicionales alrededor.
 
 ---
 
@@ -88,13 +83,13 @@ LOG_LEVEL=info
 # Producción
 npm start
 
-# Desarrollo (recarga automática con Node.js --watch)
+# Desarrollo (recarga automática)
 npm run dev
 ```
 
 Al iniciar por primera vez, se muestra un **código QR** en la terminal. Escanéalo con WhatsApp → **Dispositivos vinculados → Vincular dispositivo**.
 
-Las credenciales se guardan en `./auth_info/` y persisten entre reinicios.
+Las credenciales se guardan en `./auth_info/` localmente **y se sincronizan automáticamente** con Supabase Storage (bucket `auth-sessions`) para sobrevivir reinicios y deploys.
 
 ---
 
@@ -103,11 +98,13 @@ Las credenciales se guardan en `./auth_info/` y persisten entre reinicios.
 ```
 src/
 ├── index.js                  # Punto de entrada
+├── server.js                 # Servidor HTTP (health check + keep-alive)
 ├── config/
 │   ├── index.js              # Configuración centralizada
 │   └── logger.js             # Logger Pino
 ├── bot/
 │   ├── index.js              # Conexión Baileys + event listeners
+│   ├── auth.js               # Persistencia de sesión WhatsApp en Supabase
 │   ├── router.js             # Router: deduplicación, separación admin/cliente
 │   └── sender.js             # Wrapper de envío de mensajes
 ├── fsm/
@@ -116,7 +113,8 @@ src/
 │       ├── s1_format.js      # IDLE → AWAITING_FORMAT
 │       ├── s2_parsing.js     # AWAITING_FORMAT → AWAITING_INVOICE
 │       ├── s3_invoice.js     # AWAITING_INVOICE → AWAITING_SELECTION
-│       ├── s4_selection.js   # AWAITING_SELECTION → AWAITING_PAYMENT
+│       ├── s4_selection.js   # AWAITING_SELECTION → AWAITING_ADDRESS
+│       ├── s4b_address.js    # AWAITING_ADDRESS → AWAITING_PAYMENT
 │       ├── s5_payment.js     # AWAITING_PAYMENT → PAUSED
 │       └── s6_paused.js      # PAUSED (bot suspendido)
 ├── services/
@@ -126,7 +124,7 @@ src/
 │   ├── storage.js            # Upload a Supabase Storage con reintentos
 │   └── deadman.js            # Temporizador de pausa + boot recovery
 ├── parsers/
-│   └── formParser.js         # Extracción Regex de CP, medidas, peso
+│   └── formParser.js         # Parser flexible: formato libre, etiquetado y mixto
 └── db/
     └── migrations/
         └── 001_initial.sql   # Schema completo de Supabase
@@ -138,35 +136,87 @@ src/
 
 ```
 Cliente escribe → S0: IDLE
-                     ↓ Envía formato
-                  S1: AWAITING_FORMAT
-                     ↓ Parser Regex extrae datos
-                  S3: AWAITING_INVOICE  ← pide Sí/No factura
+                     ↓ Envía datos de paquete (medidas, peso, CPs)
+                  S1: AWAITING_FORMAT / S2: PARSING_DATA
+                     ↓ Parser extrae datos; pide los que falten
+                  S3: AWAITING_INVOICE  ← ¿Requiere factura?
                      ↓ Calcula cotización (peso facturable + cargos)
-                  S4: AWAITING_SELECTION ← muestra 3 opciones
-                     ↓ Cliente elige paquetería
+                  S4: AWAITING_SELECTION ← muestra 3 opciones de paquetería
+                     ↓ Cliente elige
+                  S4b: AWAITING_ADDRESS ← pide datos de origen/destino
+                     ↓ Parser extrae; pide campo por campo si falta algo
                   S5: AWAITING_PAYMENT  ← genera folio PED-XXXXXX
-                     ↓ Cliente envía foto/PDF
-                  S6: PAUSED  ← notifica al admin, deadman 60min
+                     ↓ Cliente envía foto/PDF del comprobante
+                  S6: PAUSED  ← notifica al admin, deadman 60 min
                      ↓ Timer expira (o admin no extiende)
                   S0: IDLE  ← lista para nueva cotización
 ```
 
 ---
 
-## Comandos del admin
+## Formatos de mensaje aceptados
 
-El encargado puede escribir al número del bot para controlar el deadman switch:
+El bot acepta datos de paquete y dirección en cualquiera de estos formatos:
 
-| Comando | Efecto |
-|---------|--------|
-| `EXTENDER` | Extiende la pausa del chat más reciente 60 minutos más |
-| `EXTENDER 5216181096537` | Extiende la pausa de un cliente específico |
-| `FINALIZADO` | Marca como finalizado (log de auditoría) |
+**Cotización en una línea:**
+```
+25x25x25, 5kg, 34198, 77710
+```
+
+**Cotización multilínea:**
+```
+25x25x25
+5 kg
+34198
+77710
+```
+
+**Dirección formato libre (remitente/receptor):**
+```
+Remitente
+Juan Pérez
+Av. Reforma 100
+Centro
+CDMX, CDMX
+5512345678
+
+Receptor
+María López
+Calle 5 de Mayo 200
+Zona Centro
+Monterrey, Nuevo León
+8112345678
+
+Ropa y calzado
+```
+
+**Dirección con etiquetas:**
+```
+Nombre Origen: Juan Pérez
+Calle y Número Origen: Av. Reforma 100
+Colonia Origen: Centro
+Ciudad y Estado Origen: CDMX
+Cel Origen: 5512345678
+...
+```
+
+El parser detecta automáticamente el formato y extrae los campos. Si faltan datos, los pide uno por uno.
 
 ---
 
-## Reglas de negocio implementadas
+## Comandos del admin
+
+El encargado escribe al número del bot para controlar el sistema:
+
+| Comando | Efecto |
+|---------|--------|
+| `EXTENDER` | Extiende la pausa 60 minutos más |
+| `FINALIZADO` | Marca como finalizado (auditoría) |
+| `RESET_AUTH` | Elimina la sesión de WhatsApp guardada en Supabase (para cambiar de número) |
+
+---
+
+## Reglas de negocio
 
 | Regla | Implementación |
 |-------|---------------|
@@ -175,24 +225,90 @@ El encargado puede escribir al número del bot para controlar el deadman switch:
 | IVA | +16% sobre el total si el cliente requiere factura |
 | Tarifas | Leídas de Google Sheets con caché de 10 min |
 | Fallback de tarifas | Usa última caché si Sheets no responde |
-| Deduplicación | `processed_messages` table con TTL 5 min |
-| Bloqueo optimista | UPDATE con condición `WHERE state = 'expected'` |
+| Deduplicación | Tabla `processed_messages` con TTL 5 min |
+| Bloqueo optimista | `UPDATE` con condición `WHERE state = 'expected'` |
 | Boot recovery | Restaura timers de pausas activas al reiniciar |
+| Expiración por inactividad | Sesión reseteada automáticamente tras 1 hora sin actividad |
 
 ---
 
-## Despliegue en producción
+## Despliegue en Render
 
-### Con PM2
+### 1. Variables de entorno
+
+En **Render → tu servicio → Environment**, agrega todas las variables del archivo `.env` más:
+
+```env
+NODE_ENV=production
+RENDER_EXTERNAL_URL=https://tu-servicio.onrender.com
+```
+
+> `RENDER_EXTERNAL_URL` es necesaria para el keep-alive automático que evita que el servicio se suspenda.
+
+### 2. Configuración del servicio
+
+| Campo | Valor |
+|-------|-------|
+| Build command | `npm install` |
+| Start command | `npm start` |
+| Node version | >= 18 |
+
+O crea un archivo `render.yaml` en la raíz:
+
+```yaml
+services:
+  - type: web
+    name: bazfez-bot
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: RENDER_EXTERNAL_URL
+        fromService:
+          type: web
+          name: bazfez-bot
+          property: host
+```
+
+### 3. Primera conexión
+
+Al hacer el primer deploy, el bot no tendrá sesión de WhatsApp guardada. Verás en los logs del servicio en Render algo como:
+
+```
+No hay sesión guardada en Supabase — se generará QR
+```
+
+Seguido del QR en texto. Escanéalo desde WhatsApp → **Dispositivos vinculados → Vincular dispositivo**.
+
+Tras escanearlo, la sesión se guarda automáticamente en Supabase Storage (bucket `auth-sessions`). Los deploys futuros arrancarán sin necesidad de escanear el QR.
+
+### 4. Cambiar de número
+
+Para cambiar el número del bot desde el admin de WhatsApp, envía el comando `RESET_AUTH` al bot. Esto elimina la sesión guardada en Supabase. Luego reinicia el servicio en Render y escanea el QR con el número nuevo.
+
+También puedes hacerlo manualmente desde **Supabase → Storage → auth-sessions → baileys-session**, seleccionando y eliminando todos los archivos.
+
+### 5. Keep-alive
+
+El bot incluye un servidor HTTP en el puerto `PORT` (por defecto 3000) que expone `/health`. Cada 13 minutos se hace un self-ping a esa URL para evitar que Render suspenda el servicio en el plan gratuito.
+
+---
+
+## Despliegue con PM2
 
 ```bash
 npm install -g pm2
-pm2 start src/index.js --name ahse-bot --interpreter node
+pm2 start src/index.js --name bazfez-bot --interpreter node
 pm2 save
 pm2 startup
 ```
 
-### Con Docker
+---
+
+## Despliegue con Docker
 
 ```dockerfile
 FROM node:20-alpine
@@ -205,16 +321,16 @@ CMD ["node", "src/index.js"]
 ```
 
 ```bash
-docker build -t ahse-bot .
+docker build -t bazfez-bot .
 docker run -d \
-  --name ahse-bot \
+  --name bazfez-bot \
   --env-file .env \
   -v $(pwd)/auth_info:/app/auth_info \
   --restart unless-stopped \
-  ahse-bot
+  bazfez-bot
 ```
 
-> **Importante:** Monta `auth_info/` como volumen para que las credenciales de WhatsApp persistan entre reinicios del contenedor.
+> En Docker la sesión persiste en el volumen `auth_info/`. Si usas Render, la persistencia la maneja Supabase Storage automáticamente.
 
 ---
 
@@ -222,9 +338,12 @@ docker run -d \
 
 | Problema | Solución |
 |----------|----------|
-| Bot no responde | Verifica que el QR fue escaneado y `connection === 'open'` en logs |
+| Bot no responde | Verifica que el QR fue escaneado y `connection === 'open'` aparece en logs |
 | `SUPABASE_SERVICE_ROLE_KEY` inválida | Usa la key de tipo `service_role`, no la `anon` |
 | Google Sheets 403 | Comparte la hoja con el email de la cuenta de servicio |
-| Bucket no creado | El bot lo crea automáticamente; verifica permisos del `service_role` |
+| Bucket no creado | El bot los crea automáticamente al arrancar; verifica permisos del `service_role` |
 | Mensajes duplicados | Normal — la deduplicación los filtra; revisa tabla `processed_messages` |
 | Timer no restaurado | Verifica que `pause_expires_at > NOW()` en la sesión pausada |
+| QR en cada deploy | La sesión no está en Supabase Storage; corre el bot local y espera el evento `creds.update` para que se suba |
+| Servicio suspendido en Render | Verifica que `RENDER_EXTERNAL_URL` está definida correctamente |
+| Colonia/ciudad no detectada | El parser usa orden posicional; asegúrate de enviar las líneas en orden: nombre → calle → colonia → ciudad → teléfono |

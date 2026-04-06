@@ -1,6 +1,5 @@
-/* src/db/migrations/001_initial.sql */
 -- ============================================================
--- AHSE Bot — Schema inicial
+-- BazFez Bot — Schema inicial
 -- Ejecutar en el SQL Editor de Supabase
 -- ============================================================
 
@@ -11,6 +10,7 @@ CREATE TYPE fsm_state AS ENUM (
   'PARSING_DATA',
   'AWAITING_INVOICE',
   'AWAITING_SELECTION',
+  'AWAITING_ADDRESS',
   'AWAITING_PAYMENT',
   'PAUSED'
 );
@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   billable_weight   NUMERIC(8,2),
   oversize_charge   NUMERIC(8,2) DEFAULT 0,
   total_amount      NUMERIC(10,2),
+  pending_selection TEXT,
   paused_at         TIMESTAMPTZ,
   pause_expires_at  TIMESTAMPTZ,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -34,14 +35,14 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 -- ── orders ───────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS orders (
-  folio             TEXT PRIMARY KEY,            -- PED-XXXXXX
+  folio             TEXT PRIMARY KEY,
   chat_id           TEXT NOT NULL REFERENCES sessions(chat_id),
   carrier           TEXT NOT NULL,
   total_amount      NUMERIC(10,2) NOT NULL,
   invoice_required  BOOLEAN NOT NULL DEFAULT FALSE,
   billable_weight   NUMERIC(8,2),
   oversize_charge   NUMERIC(8,2) DEFAULT 0,
-  form_snapshot     JSONB,                       -- copia del formulario al crear el pedido
+  form_snapshot     JSONB,
   status            TEXT NOT NULL DEFAULT 'PENDING_PAYMENT',
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -57,7 +58,6 @@ CREATE TABLE IF NOT EXISTS file_uploads (
 );
 
 -- ── admin_pauses ─────────────────────────────────────────
--- Auditoría de extensiones de pausa
 CREATE TABLE IF NOT EXISTS admin_pauses (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   chat_id         TEXT NOT NULL REFERENCES sessions(chat_id),
@@ -66,14 +66,12 @@ CREATE TABLE IF NOT EXISTS admin_pauses (
 );
 
 -- ── processed_messages ───────────────────────────────────
--- Deduplicación de eventos de Baileys (TTL gestionado por la app)
 CREATE TABLE IF NOT EXISTS processed_messages (
   message_id   TEXT PRIMARY KEY,
   chat_id      TEXT NOT NULL,
   processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Índice para limpiar mensajes expirados eficientemente
 CREATE INDEX IF NOT EXISTS idx_processed_msgs_at
   ON processed_messages (processed_at);
 
@@ -91,12 +89,9 @@ CREATE TRIGGER trg_sessions_updated_at
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- ── RLS (Row Level Security) ──────────────────────────────
--- Usamos service_role_key desde el backend, así que deshabilitamos RLS
--- o la configuramos para service_role bypass
-ALTER TABLE sessions          ENABLE ROW LEVEL SECURITY;
-ALTER TABLE orders            ENABLE ROW LEVEL SECURITY;
-ALTER TABLE file_uploads      ENABLE ROW LEVEL SECURITY;
-ALTER TABLE admin_pauses      ENABLE ROW LEVEL SECURITY;
+-- El service_role_key del backend ignora RLS por defecto
+ALTER TABLE sessions           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE file_uploads       ENABLE ROW LEVEL SECURITY;
+ALTER TABLE admin_pauses       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE processed_messages ENABLE ROW LEVEL SECURITY;
-
--- El service_role de Supabase ignora RLS por defecto, no se necesitan políticas adicionales
