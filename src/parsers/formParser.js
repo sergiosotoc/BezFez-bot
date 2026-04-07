@@ -10,12 +10,20 @@ function normalize(str) {
 function normalizePhone(phone) {
   if (!phone) return null;
 
-  let cleaned = String(phone).replace(/[\s\-().+]/g, '').replace(/\D/g, '');
+  // Eliminar todos los caracteres no numéricos
+  let cleaned = String(phone).replace(/\D/g, '');
 
+  // Manejar diferentes formatos de código de país
   if (cleaned.startsWith('52') && cleaned.length === 12) {
     cleaned = cleaned.slice(2);
+  } else if (cleaned.startsWith('521') && cleaned.length === 13) {
+    cleaned = cleaned.slice(3);
+  } else if (cleaned.startsWith('1') && cleaned.length === 11) {
+    // Algunos formatos pueden tener un 1 adicional
+    cleaned = cleaned.slice(1);
   }
 
+  // Validar que sea exactamente 10 dígitos
   return cleaned.length === 10 ? cleaned : null;
 }
 
@@ -145,7 +153,7 @@ function parsePersonBlock(block) {
   const data = {};
   const norm = (s) => normalize(s);
 
-  // ── Primero: extraer líneas con etiqueta explícita ──────────────
+  // --- Líneas que NO deben procesarse como dirección ---
   const untagged = [];
 
   for (const line of lines) {
@@ -154,82 +162,104 @@ function parsePersonBlock(block) {
     // Saltar encabezados de bloque
     if (/^(remitente|destinatario|receptor|envia|datos\s+de)/.test(n)) continue;
 
-    // CP etiquetado
+    // 1. TELÉFONO (Prioridad Alta)
+    // Buscamos etiquetas como Tel, Cel, Whatsapp seguidas de números, 
+    // permitiendo puntos o espacios intermedios (ej: "Tel.33...")
+    const telMatch = line.match(/(?:cel(?:ular)?|tel(?:e?fono)?|whatsapp|movil|móvil)\s*\.?\s*[:\s]*([\d\s\-+()]{7,})/i);
+
+    // También validamos si la línea es un número puro de 10-12 dígitos (limpiando basura)
+    const digitsOnly = line.replace(/\D/g, '');
+    const isLikelyPhone = /^\d{10}$/.test(digitsOnly);
+
+    if (telMatch || isLikelyPhone) {
+      const phoneRaw = telMatch ? telMatch[1] : digitsOnly;
+      const phone = normalizePhone(phoneRaw);
+      if (phone) {
+        data.cel = phone;
+        continue;
+      }
+    }
+
+    // 2. CP (Etiquetado o suelto de 5 dígitos)
     const cpMatch = n.match(/\bc\.?\s*p\.?\s*[:\s]\s*(\d{5})\b/) ||
       n.match(/\bcp\s*[:\s]\s*(\d{5})\b/) ||
-      n.match(/\bc\.?\s*p\.?\s+(\d{5})\b/);
-    if (cpMatch) { data.cp = cpMatch[1]; continue; }
+      n.match(/\bc\.?\s*p\.?\s+(\d{5})\b/) ||
+      (/^\d{5}$/.test(line.trim()) ? [null, line.trim()] : null);
 
-    // Teléfono etiquetado
-    const telMatch = n.match(/(?:cel(?:ular)?|tel(?:e?fono)?|whatsapp)\s*\.?\s*[:\s]\s*([\d\s\-+()]{7,})/);
-    if (telMatch) {
-      const phone = normalizePhone(telMatch[1]);
-      if (phone) { data.cel = phone; } else { data.invalid_phone = true; }
+    if (cpMatch) {
+      data.cp = cpMatch[1];
       continue;
     }
 
-    // Colonia etiquetada
-    const colMatch = line.match(/^col(?:onia)?\.?\s+(.+)/i) ||
-      line.match(/^col(?:onia)?\s*:\s*(.+)/i);
-    if (colMatch) { data.colonia = colMatch[1].trim(); continue; }
+    // 3. CP (PRIORIDAD SOBRE COLONIA)
+    const cpInline = line.match(/\bcp\.?\s*:?[\s]*(\d{5})\b/i);
+    if (cpInline) {
+      data.cp = cpInline[1];
+      continue;
+    }
 
-    // Calle etiquetada
+    // 4. COLONIA (solo si no es CP)
+    const colMatch = line.match(/^col(?:onia)?\.?\s*(.+)/i);
+
+    if (colMatch) {
+      let value = colMatch[1].trim();
+
+      if (!/\b\d{5}\b/.test(value)) {
+        data.colonia = value.replace(/^\.*/, '').trim();
+      }
+
+      continue;
+    }
+
+    // 4. CALLE (Etiquetada explícitamente)
     const calleMatch = line.match(/^calle\s*[:\s]\s*(.+)/i);
-    if (calleMatch) { data.calle = calleMatch[1].trim(); continue; }
-
-    // Teléfono suelto (solo dígitos)
-    const soloNumeros = line.replace(/[\s\-()]/g, '');
-    if (/^\+?[\d]{10,15}$/.test(soloNumeros) && !data.cel) {
-      const phone = normalizePhone(soloNumeros);
-      if (phone) { data.cel = phone; } else { data.invalid_phone = true; }
+    if (calleMatch) {
+      data.calle = calleMatch[1].trim();
       continue;
     }
 
-    // CP suelto de 5 dígitos
-    if (/^\d{5}$/.test(line.trim()) && !data.cp) {
-      data.cp = line.trim();
-      continue;
-    }
+    // 5. ASIGNACIÓN POSICIONAL (Si no es nada de lo anterior)
+    const esContenido = /(?:ropa|zapatos|electronicos|libros|herramientas|documentos|papeles)/i.test(line);
 
-    // Sin etiqueta → acumular para asignación posicional
-    untagged.push(line.trim());
+    // Si llegamos aquí y no es contenido, lo guardamos para adivinar qué es
+    if (!esContenido && line.length < 60) {
+      untagged.push(line.trim());
+    }
   }
 
   const posQueue = [...untagged];
 
-  // nombre: primera línea sin número
+  // nombre: primera línea que no tenga números (o la primera disponible)
   if (!data.nombre && posQueue.length > 0) {
-    data.nombre = posQueue.shift();
+    const nameIdx = posQueue.findIndex(l => !/\d/.test(l));
+    if (nameIdx !== -1) {
+      data.nombre = posQueue.splice(nameIdx, 1)[0];
+    } else {
+      data.nombre = posQueue.shift();
+    }
   }
 
-  // calle: primera línea con número
+  // calle: línea que contenga números (típico de direcciones #123)
   if (!data.calle && posQueue.length > 0) {
-    const calleIdx = posQueue.findIndex(l =>
-      /(#\d|no\.?\s*\d|num\.?\s*\d|\d)/i.test(l)
-    );
+    const calleIdx = posQueue.findIndex(l => /\d/.test(l));
     if (calleIdx !== -1) {
       data.calle = posQueue.splice(calleIdx, 1)[0];
     }
   }
 
-  // ciudad: línea con coma O la última línea de 2+ palabras
+  // ciudad: si queda algo con coma o palabras de estado
   if (!data.ciudad && posQueue.length > 0) {
-    const ciudadIdx = posQueue.findIndex(l => l.includes(','));
+    const ciudadIdx = posQueue.findIndex(l =>
+      !l.toLowerCase().startsWith('col') && 
+      !/\d{5}/.test(l) &&
+      (l.includes(',') || l.split(' ').length >= 2)
+    );
     if (ciudadIdx !== -1) {
       data.ciudad = posQueue.splice(ciudadIdx, 1)[0];
-    } else {
-      // Buscar línea de 2+ palabras que parezca ciudad (sin dígitos dominantes)
-      const ciudadIdx2 = posQueue.findIndex(l => {
-        const words = l.split(/\s+/);
-        return words.length >= 2 && !/^\d/.test(l) && !/\d{4,}/.test(l);
-      });
-      if (ciudadIdx2 !== -1) {
-        data.ciudad = posQueue.splice(ciudadIdx2, 1)[0];
-      }
     }
   }
 
-  // colonia: lo que quede
+  // colonia: lo que sobre
   if (!data.colonia && posQueue.length > 0) {
     data.colonia = posQueue.shift();
   }
@@ -241,25 +271,8 @@ export function parseFormatoLibre(text) {
   const data = {};
 
   const allLines = text.split('\n').map(l => l.trim()).filter(Boolean);
-  const lastLine = allLines[allLines.length - 1];
-  if (lastLine) {
-    const n = normalize(lastLine);
-    const isHeader = /remitente|receptor|destinatario|destino|origen|contenido|paquete/i.test(n);
-    const isPhone = /^\+?\d{7,15}$/.test(lastLine.replace(/\D/g, '')); // Teléfono válido
-    const isCP = /^\d{5}$/.test(lastLine.trim());
-    const isDims = /\d+\s*[x×]\s*\d+/.test(lastLine);
-    const isCel = /^(cel|tel|whatsapp)/i.test(n);
-    const hasLetters = /[a-zA-Z]/.test(lastLine);
 
-    if (!isHeader && !isCP && !isDims && !isCel && !isPhone && hasLetters && lastLine.length >= 3) {
-      // Verificar que no sea un teléfono puro ni parte de los bloques ya parseados
-      const digitsOnly = lastLine.replace(/[^0-9]/g, '');
-      if (digitsOnly.length < 7) {
-        data.contenido = lastLine;
-      }
-    }
-  }
-
+  // Extraer bloques de origen y destino
   const origenBlock = extractBlock(
     text,
     /remitente|envia(nte)?|origen/i,
@@ -294,6 +307,7 @@ export function parseFormatoLibre(text) {
     if (destino.invalid_phone) data.invalid_phone_destino = true;
   }
 
+  // Extraer medidas
   const medidas = extractMedidas(text);
   if (medidas) {
     data.medidas = medidas;
@@ -305,6 +319,7 @@ export function parseFormatoLibre(text) {
     }
   }
 
+  // Extraer peso
   const pesoMatch = normalize(text).match(/(\d+(?:\.\d+)?)\s*kg/) ||
     normalize(text).match(/peso\s*[:\s]\s*(\d+(?:\.\d+)?)/);
   if (pesoMatch) {
@@ -314,31 +329,28 @@ export function parseFormatoLibre(text) {
 
   const contenidoMatch = text.match(/contenido\s*[:\s]\s*(.+)/i);
   if (contenidoMatch) {
-    data.contenido = contenidoMatch[1].trim();
-  } else {
-    // Detectar última línea suelta como contenido (sin etiqueta)
-    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-    const lastLine = lines[lines.length - 1];
-    const norm = normalize(lastLine);
-    const isHeader = /remitente|receptor|destinatario|destino|origen|contenido/i.test(norm);
-    const isPhone = /^\+?\d{7,15}$/.test(lastLine.replace(/\D/g, ''));
-    const isCP = /^\d{5}$/.test(lastLine.trim());
-    const isDimensions = /\d+\s*[x×]\s*\d+/.test(lastLine);
-    const hasLetters = /[a-zA-Z]/.test(lastLine);
-
-    if (!isHeader && !isPhone && !isCP && !isDimensions && hasLetters && lastLine.length >= 3) {
-      const isKnownData = [
-        data.nombre_origen, data.calle_origen, data.colonia_origen,
-        data.ciudad_origen, data.cel_origen,
-        data.nombre_destino, data.calle_destino, data.colonia_destino,
-        data.ciudad_destino, data.cel_destino,
-      ].some(v => v && normalize(v) === norm);
-
-      if (!isKnownData) {
-        data.contenido = lastLine;
-      }
+    const posibleContenido = contenidoMatch[1].trim();
+    const palabrasInvalidas = [
+      'destinatario', 'remitente', 'paquete', 'producto', 'articulo',
+      'medidas', 'peso', 'contenido', 'origen', 'destino', 'cliente',
+      'envio', 'envió', 'guia', 'guía', 'factura', 'cotizacion',
+    ];
+    const valido = (
+      posibleContenido.length >= 3 &&
+      !palabrasInvalidas.includes(posibleContenido.toLowerCase()) &&
+      !/calle|colonia|ciudad|cp|c\.p|estado|municipio/i.test(posibleContenido) &&
+      !/^\d+$/.test(posibleContenido.replace(/\s/g, '')) &&
+      !/\d+\s*[x×]\s*\d+/.test(posibleContenido) &&
+      /[a-zA-Z]/.test(posibleContenido)
+    );
+    if (valido) {
+      data.contenido = posibleContenido;
     }
   }
+
+  // IMPORTANTE: NO asignar contenido por defecto
+  // Si no se encontró contenido válido, simplemente no se incluye en data
+  // Esto hará que el bot lo solicite explícitamente
 
   return data;
 }
@@ -440,88 +452,71 @@ export function parseForm(text) {
 
 export function mergeFormData(prev = {}, next = {}) {
   const result = { ...prev };
+
   Object.entries(next).forEach(([key, value]) => {
-    if (value !== null && value !== undefined && String(value).trim() !== '') {
-      result[key] = value;
+    if (value === null || value === undefined) return;
+
+    const clean = String(value).trim();
+    if (!clean) return;
+
+    if (key === 'cp_origen' || key === 'cp_destino') {
+      if (!result[key] && /^\d{5}$/.test(clean)) {
+        result[key] = clean;
+      }
+      return;
     }
+
+    if (result[key]) {
+      if (key.startsWith('cel_') && result[key].length === 10) return;
+      if (key === 'peso' && result[key] > 0) return;
+      if (key === 'medidas' && result[key].includes('x')) return;
+    }
+
+    result[key] = value;
   });
+
   return result;
 }
 
-export function parsePartialResponse(text, fieldKeys) {
-  const t = text.replace(/\*/g, '').replace(/\r/g, '').trim();
-  const lines = t.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+export function parsePartialResponse(text, fieldKeys = []) {
+  const result = {};
+  const cleanText = text.replace(/\*/g, '').trim();
 
-  const found = {};
-  let fieldIndex = 0;
-
-  for (const line of lines) {
-    if (fieldIndex >= fieldKeys.length) break;
-
-    const currentField = fieldKeys[fieldIndex];
-
-    if (currentField === 'cel_origen' || currentField === 'cel_destino') {
-      const phone = normalizePhone(line);
-
-      if (phone) {
-        found[currentField] = phone;
-        fieldIndex++;
-        continue;
-      } else {
-        found[`invalid_${currentField}`] = true;
-        continue;
-      }
-    }
-
-    if (currentField === 'cp_origen' || currentField === 'cp_destino') {
-      const cp = line.match(/\b(\d{5})\b/);
-      if (cp) {
-        found[currentField] = cp[1];
-        fieldIndex++;
-        continue;
-      }
-    }
-
-    if (currentField === 'medidas' || currentField === 'largo') {
-      const med = extractMedidas(line);
-      if (med) {
-        found.medidas = med;
-        const dims = parseDimensions(med);
-        if (dims) {
-          found.largo = dims.largo;
-          found.ancho = dims.ancho;
-          found.alto = dims.alto;
-        }
-        fieldIndex++;
-        continue;
-      }
-    }
-
-    if (currentField === 'peso') {
-      const p = normalize(line).match(/(\d+(\.\d+)?)/);
-      if (p) {
-        const value = parseFloat(p[1]);
-        if (value > 0 && value <= 1000) {
-          found.peso = value;
-          fieldIndex++;
-          continue;
-        }
-      }
-    }
-
-    if (currentField === 'contenido') {
-      if (line.length > 2) {
-        found.contenido = line;
-        fieldIndex++;
-        continue;
-      }
-    }
-
-    found[currentField] = line;
-    fieldIndex++;
+  // 🔹 Teléfono
+  const phoneMatch = cleanText.match(/(\d[\d\s\-]{8,}\d)/);
+  if (phoneMatch) {
+    const phone = normalizePhone(phoneMatch[1]);
+    if (phone) result.cel = phone;
   }
 
-  return found;
+  // 🔹 CP
+  const cpMatch = cleanText.match(/\b\d{5}\b/);
+  if (cpMatch) {
+    result.cp = cpMatch[0];
+  }
+
+  // 🔹 Medidas
+  const medidas = extractMedidas(cleanText);
+  if (medidas) {
+    result.medidas = medidas;
+    const dims = parseDimensions(medidas);
+    if (dims) {
+      result.largo = dims.largo;
+      result.ancho = dims.ancho;
+      result.alto = dims.alto;
+    }
+  }
+
+  // 🔹 Peso
+  const peso = extractPeso(cleanText);
+  if (peso) result.peso = peso;
+
+  // 🔹 Texto libre (para contenido o nombre)
+  if (cleanText.length > 3 && !result.medidas && !result.peso) {
+    result.text = cleanText;
+  }
+
+  return result;
 }
 
 
@@ -723,13 +718,23 @@ export function parseFlexibleInput(text) {
     cpDestino = cpDestino || match[2];
   }
 
-  if (!cpOrigen || !cpDestino) {
-    const allCPs = norm.match(/\b\d{5}\b/g);
+  // 🔥 CASO CLAVE: solo viene un CP
+  const allCPs = norm.match(/\b\d{5}\b/g);
 
-    if (allCPs && allCPs.length >= 2) {
-      if (!cpOrigen) cpOrigen = allCPs[0];
-      if (!cpDestino) cpDestino = allCPs[1];
+  if (allCPs && allCPs.length === 1) {
+    const cp = allCPs[0];
+
+    // 👉 NO sobrescribir si ya existe
+    if (!data.cp_origen) {
+      data.cp_origen = cp;
+    } else if (!data.cp_destino) {
+      data.cp_destino = cp;
     }
+  }
+
+  if (allCPs && allCPs.length >= 2) {
+    if (!cpOrigen) cpOrigen = allCPs[0];
+    if (!cpDestino) cpDestino = allCPs[1];
   }
 
   if (cpOrigen) data.cp_origen = cpOrigen;
@@ -739,4 +744,5 @@ export function parseFlexibleInput(text) {
   const finalData = mergeFormData(data, loose);
 
   return finalData;
+
 }

@@ -113,6 +113,8 @@ export async function handleAwaitingSelection(ctx) {
   }
 
   if (needsAddressCollection(form_data)) {
+    console.log('Form data before address collection:', form_data);
+
     const { success } = await transitionState(
       chatId,
       'AWAITING_SELECTION',
@@ -121,6 +123,7 @@ export async function handleAwaitingSelection(ctx) {
         selected_carrier: chosen.label,
         total_amount: chosen.total,
         pending_selection: null,
+        form_data: form_data,
       }
     );
 

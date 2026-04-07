@@ -1,6 +1,11 @@
 /* src/fsm/states/s1_format.js */
 import { updateSession } from '../../services/supabase.js';
-import { parseFlexibleInput, getMissingFields, getMissingFieldMessage, detectUserInput } from '../../parsers/formParser.js';
+import { 
+  parseFlexibleInput, 
+  getMissingFieldMessage, 
+  detectUserInput,
+  mergeFormData 
+} from '../../parsers/formParser.js';
 
 // ─────────────────────────────────────────────────────────
 // MENSAJES
@@ -50,17 +55,22 @@ export async function handleIdle(ctx) {
     return;
   }
 
-  // 1. Intentar detectar datos de inmediato (Incluso en el primer mensaje)
   const detection = detectUserInput(text);
   const parsed = parseFlexibleInput(text);
-  const combined = { ...parsed, ...detection.data };
 
-  // 2. Si tiene ALGO de datos (medidas, CP o peso), inicializamos la sesión con eso
-  if (Object.keys(combined).length > 0) {
-    const missing = getMissingFields(combined);
-    
-    // Si están completos, vamos a factura. Si no, a PARSING_DATA para pedir el resto.
-    const nextState = (missing.length === 0) ? 'AWAITING_INVOICE' : 'AWAITING_FORMAT';
+  const combined = mergeFormData(parsed, detection.data);
+
+  const hasValidData =
+    combined.cp_origen ||
+    combined.cp_destino ||
+    combined.peso ||
+    combined.medidas;
+
+  if (hasValidData) {
+    const missing = validateInitialData(combined);
+
+    const nextState = 
+    (missing.length === 0) ? 'AWAITING_INVOICE' : 'PARSING_DATA';
 
     await updateSession(chatId, {
       state: nextState,
@@ -68,15 +78,31 @@ export async function handleIdle(ctx) {
     });
 
     if (missing.length === 0) {
-      await sender.sendText(chatId, '¡Perfecto! Ya tengo todos los datos del paquete 📦\n\n¿Necesitas *factura* (con IVA)?\n1️⃣ Sí\n2️⃣ No');
+      await sender.sendText(
+        chatId,
+        '¡Perfecto! Ya tengo todos los datos del paquete 📦\n\n¿Necesitas *factura* (con IVA)?\n1️⃣ Sí\n2️⃣ No'
+      );
     } else {
       await sender.sendText(chatId, getMissingFieldMessage(missing));
     }
+
     return;
   }
 
-  // 3. Si no detectó nada (solo dijo "hola"), mandar bienvenida normal
   await sender.sendText(chatId, WELCOME_MESSAGE);
+}
+
+function validateInitialData(data) {
+  const missing = [];
+
+  if (!/^\d{5}$/.test(data.cp_origen || '')) missing.push('cp_origen');
+  if (!/^\d{5}$/.test(data.cp_destino || '')) missing.push('cp_destino');
+
+  if (!data.medidas || !data.largo) missing.push('medidas');
+
+  if (!data.peso || data.peso <= 0) missing.push('peso');
+
+  return missing;
 }
 
 export async function handleAwaitingFormat(ctx) {

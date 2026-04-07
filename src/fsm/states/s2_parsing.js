@@ -1,8 +1,7 @@
 /* src/fsm/states/s2_parsing.js */
 import { transitionState, updateSession } from '../../services/supabase.js';
 import {
-  parseForm,
-  parsePartialResponse,
+  parseFlexibleInput,
   detectUserInput,
   mergeFormData,
   getMissingFields,
@@ -12,7 +11,7 @@ import {
 const INVOICE_QUESTION = `¿Necesitas factura?\n1. Sí\n2. No`;
 
 function rescueDimensions(data) {
-  if (data.largo && data.ancho && data.alto) 
+  if (data.largo && data.ancho && data.alto)
     return data;
 
   if (data.medidas) {
@@ -39,30 +38,41 @@ export async function handleParsingData(ctx) {
 
   const prevData = session?.form_data || {};
 
-  let { data: parsed } = parseForm(text);
+  const parsed = parseFlexibleInput(text);
   const detection = detectUserInput(text);
 
-  let merged = mergeFormData(prevData, parsed || {});
+  // 🔥 FIX CP SUELTO
+  if (/^\d{5}$/.test(text.trim())) {
+    if (prevData.cp_origen && !prevData.cp_destino) {
+      parsed.cp_destino = text.trim();
+    }
+  }
+
+  let merged = mergeFormData(prevData, parsed);
+
   if (detection.hasAnyData) {
     merged = mergeFormData(merged, detection.data);
   }
 
-  merged = rescueDimensions(merged);
+  const cleanMerged = rescueDimensions(merged);
 
-  await updateSession(chatId, { form_data: merged });
+  await updateSession(chatId, { form_data: cleanMerged });
 
-  const missing = getMissingFields(merged);
+  const missing = getMissingFields(cleanMerged);
 
   if (missing.length === 0) {
     const { success } = await transitionState(
       chatId,
-      'AWAITING_FORMAT',
+      'PARSING_DATA',
       'AWAITING_INVOICE',
-      { form_data: merged }
+      { form_data: cleanMerged }
     );
 
     if (success) {
-      await sender.sendText(chatId, INVOICE_QUESTION);
+      await sender.sendText(
+        chatId,
+        '¿Necesitas factura?\n1️⃣ Sí\n2️⃣ No'
+      );
     }
     return;
   }

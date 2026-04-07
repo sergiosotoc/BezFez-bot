@@ -21,11 +21,20 @@ import { ensureAuthBucket, downloadAuthFromSupabase, uploadAuthToSupabase } from
 const AUTH_DIR = './auth_info';
 
 export async function startBot() {
-  await ensureBucketExists();
+  try {
+    await ensureBucketExists();
+    logger.info('Bucket de Supabase Storage verificado');
+  } catch (err) {
+    logger.error({ err: err.message }, 'Error verificando bucket (no crítico)');
+  }
   logger.info('Bucket de Supabase Storage verificado');
 
-  await ensureAuthBucket();
-  await downloadAuthFromSupabase();
+  try {
+    await ensureAuthBucket();
+    await downloadAuthFromSupabase();
+  } catch (err) {
+    logger.error({ err: err.message }, 'Error descargando auth de Supabase, se continúa sin sync');
+  }
 
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
@@ -111,7 +120,12 @@ export async function startBot() {
 
   sock.ev.on('creds.update', async () => {
     await saveCreds();
-    await uploadAuthToSupabase();
+
+    try {
+      await uploadAuthToSupabase();
+    } catch (err) {
+      logger.error({ err: err.message }, 'Error subiendo auth a Supabase (no crítico)');
+    }
   });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
