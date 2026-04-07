@@ -5,7 +5,6 @@ import { handleParsingData } from './states/s2_parsing.js';
 import { handleAwaitingInvoice } from './states/s3_invoice.js';
 import { handleAwaitingSelection } from './states/s4_selection.js';
 import { handleAwaitingAddress } from './states/s4b_address.js';
-import { handleAwaitingPayment } from './states/s5_payment.js';
 import { handlePaused } from './states/s6_paused.js';
 import { logger } from '../config/logger.js';
 
@@ -44,11 +43,8 @@ export async function dispatch(ctx) {
     case 'AWAITING_SELECTION':
       return handleAwaitingSelection(ctx);
 
-    case 'AWAITING_ADDRESS':          // ← NUEVO
+    case 'AWAITING_ADDRESS':
       return handleAwaitingAddress(ctx);
-
-    case 'AWAITING_PAYMENT':
-      return handleAwaitingPayment(ctx);
 
     case 'PAUSED':
       return handlePaused(ctx);

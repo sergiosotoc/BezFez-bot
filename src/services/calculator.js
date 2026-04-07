@@ -74,29 +74,6 @@ export function formatQuoteMessage({
   return lines.join('\n');
 }
 
-export function formatPaymentMessage(folio, amount) {
-  const { name, account, clabe, holder } = config.bank;
-  return [
-    '💳 *PASO 3 – PAGO SEGURO*',
-    '',
-    `Tu guía está lista para generarse 🎉`,
-    `*Folio: ${folio}*`,
-    '',
-    `Realiza tu pago de *$${amount}* a través de:`,
-    '',
-    `🏦 *Transferencia / SPEI*`,
-    `Banco: ${name}`,
-    `Cuenta: ${account}`,
-    `CLABE: ${clabe}`,
-    `Titular: ${holder}`,
-    '',
-    '📸 Cuando realices el pago, envíame aquí la *foto o PDF* de tu comprobante.',
-    '',
-    '_Una vez confirmado el pago recibirás tu guía en PDF lista para imprimir. 📄_',
-  ].join('\n');
-}
-
-
 export function formatAdminSummary({
   folio,
   carrier,
@@ -181,8 +158,6 @@ export function formatAdminSummary({
     `Medidas (LxAxA): ${medidas}`,
     `Peso (kg): ${peso}`,
     `Contenido: ${contenido}`,
-    '',
-    'Adjunto comprobante enviado por el cliente.',
     '',
     waLink
       ? `📲 *Enviar guía al cliente:*\n${waLink}`

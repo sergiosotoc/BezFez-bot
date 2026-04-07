@@ -92,41 +92,6 @@ export async function resetSession(chatId) {
   if (error) throw error;
 }
 
-export async function createOrder(orderData) {
-  let attempts = 0;
-  while (attempts < 5) {
-    const folio = `PED-${String(Math.floor(100000 + Math.random() * 900000))}`;
-    const { data, error } = await supabase
-      .from('orders')
-      .insert({ folio, ...orderData })
-      .select()
-      .single();
-
-    if (!error) return data;
-
-    if (error.code !== '23505') throw error;
-    attempts++;
-  }
-  throw new Error('No se pudo generar un folio único después de 5 intentos');
-}
-
-export async function updateOrderStatus(folio, status) {
-  const { error } = await supabase
-    .from('orders')
-    .update({ status })
-    .eq('folio', folio);
-
-  if (error) throw error;
-}
-
-export async function saveFileUpload({ folio, storageUrl, mimeType, fileSize }) {
-  const { error } = await supabase
-    .from('file_uploads')
-    .insert({ folio, storage_url: storageUrl, mime_type: mimeType, file_size: fileSize });
-
-  if (error) throw error;
-}
-
 export async function markMessageProcessed(messageId, chatId) {
   const { error } = await supabase
     .from('processed_messages')

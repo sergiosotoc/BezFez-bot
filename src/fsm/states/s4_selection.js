@@ -1,9 +1,11 @@
 /* src/fsm/states/s4_selection.js */
+
 import { transitionState, updateSession } from '../../services/supabase.js';
 import { parseCarrierSelection } from '../../parsers/formParser.js';
-import { formatPaymentMessage } from '../../services/calculator.js';
-import { createOrder } from '../../services/supabase.js';
 import { needsAddressCollection, buildInitialAddressRequest } from './s4b_address.js';
+import { formatAdminSummary } from '../../services/calculator.js';
+import { startPause } from '../../services/deadman.js';
+import { config } from '../../config/index.js';
 
 const UNKNOWN_SELECTION_MSG = (quotes) => {
   const lines = [
@@ -23,7 +25,7 @@ const UNKNOWN_SELECTION_MSG = (quotes) => {
 };
 
 export async function handleAwaitingSelection(ctx) {
-  const { chatId, text, session, sender } = ctx;
+  const { chatId, text, session, sender, clientPhone, pushName } = ctx;
 
   if (!text) return;
 
@@ -47,6 +49,10 @@ export async function handleAwaitingSelection(ctx) {
 
   let selection = null;
 
+  // ─────────────────────────────────────────
+  // MANEJO DE AMBIGÜEDAD
+  // ─────────────────────────────────────────
+
   if (pending_selection === 'estafeta') {
     if (/express|exp|rapido|rápido/i.test(text)) {
       selection = { id: 1, label: 'Estafeta Express' };
@@ -55,7 +61,7 @@ export async function handleAwaitingSelection(ctx) {
     } else {
       await sender.sendText(
         chatId,
-        'Perfecto 👍\n\n¿Deseas *Estafeta Express* 🚀 (más rápido) o *Estafeta Terrestre* 🚚 (más económico)?\n\nResponde: EXPRESS o TERRESTRE'
+        'Perfecto 👍\n\n¿Deseas *Estafeta Express* 🚀 o *Estafeta Terrestre* 🚚?\n\nResponde: EXPRESS o TERRESTRE'
       );
       return;
     }
@@ -75,6 +81,10 @@ export async function handleAwaitingSelection(ctx) {
   if (selection) {
     await updateSession(chatId, { pending_selection: null });
   }
+
+  // ─────────────────────────────────────────
+  // PARSEO NORMAL
+  // ─────────────────────────────────────────
 
   if (!selection) {
     const parsed = parseCarrierSelection(text);
@@ -112,9 +122,11 @@ export async function handleAwaitingSelection(ctx) {
     return;
   }
 
-  if (needsAddressCollection(form_data)) {
-    console.log('Form data before address collection:', form_data);
+  // ─────────────────────────────────────────
+  // VALIDACIÓN FINAL (CRÍTICO)
+  // ─────────────────────────────────────────
 
+  if (needsAddressCollection(form_data)) {
     const { success } = await transitionState(
       chatId,
       'AWAITING_SELECTION',
@@ -133,31 +145,50 @@ export async function handleAwaitingSelection(ctx) {
     return;
   }
 
-  const order = await createOrder({
-    chat_id: chatId,
+  // ─────────────────────────────────────────
+  // TODO COMPLETO → ENVIAR AL ADMIN
+  // ─────────────────────────────────────────
+
+  const folio = `PED-${Date.now()}`;
+
+  const adminSummary = formatAdminSummary({
+    folio,
     carrier: chosen.label,
-    total_amount: chosen.total,
-    invoice_required,
-    billable_weight,
-    oversize_charge,
-    form_snapshot: form_data,
-    status: 'PENDING_PAYMENT',
+    total: chosen.total,
+    clientJid: chatId,
+    clientPhone,
+    pushName,
+    formData: form_data,
+    calc: {
+      pesoFacturable: billable_weight,
+      oversize: (oversize_charge || 0) > 0,
+    },
+    invoice: invoice_required,
   });
 
+  // 📩 Enviar al admin
+  await sender.sendText(config.admin.jid, adminSummary);
+
+  // 📲 Notificar cliente
+  await sender.sendText(
+    chatId,
+    `✅ *Tu solicitud fue enviada correctamente*
+
+Tu guía será generada por un asesor.
+
+📲 En breve recibirás atención personalizada.
+Si hay algún ajuste en el precio, se te notificará antes de generar la guía.`
+  );
+
+  // ⏸️ Pasar a PAUSED
   const { success } = await transitionState(
     chatId,
     'AWAITING_SELECTION',
-    'AWAITING_PAYMENT',
-    {
-      selected_carrier: chosen.label,
-      total_amount: chosen.total,
-      pending_selection: null,
-      form_data: { ...form_data, current_folio: order.folio },
-    }
+    'PAUSED'
   );
 
   if (!success) return;
 
-  const paymentMsg = formatPaymentMessage(order.folio, chosen.total);
-  await sender.sendText(chatId, paymentMsg);
+  // ⏱️ Activar deadman
+  await startPause(chatId, folio, pushName || chatId);
 }

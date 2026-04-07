@@ -1,7 +1,6 @@
 /* src/fsm/states/s4b_address.js */
 import { transitionState, updateSession } from '../../services/supabase.js';
 import { parseForm, mergeFormData } from '../../parsers/formParser.js';
-import { createOrder } from '../../services/supabase.js';
 
 const REQUIRED_FIELDS = [
   'nombre_origen',
@@ -232,34 +231,19 @@ export async function handleAwaitingAddress(ctx) {
     return;
   }
 
-  // Crear orden y continuar con pago
-  const order = await createOrder({
-    chat_id: chatId,
-    carrier: selected_carrier,
-    total_amount,
-    invoice_required,
-    billable_weight,
-    oversize_charge,
-    form_snapshot: merged,
-    status: 'PENDING_PAYMENT',
-  });
-
-  const { success } = await transitionState(
+  await transitionState(
     chatId,
     'AWAITING_ADDRESS',
-    'AWAITING_PAYMENT',
+    'AWAITING_SELECTION',
     {
-      form_data: {
-        ...merged,
-        current_folio: order.folio
-      }
+      form_data: merged
     }
   );
 
-  if (success) {
-    const { formatPaymentMessage } = await import('../../services/calculator.js');
-    await sender.sendText(chatId, formatPaymentMessage(order.folio, total_amount, merged));
-  }
+  await sender.sendText(
+    chatId,
+    'Perfecto 👍 Ya tengo todos los datos.\n\nAhora confirma tu paquetería escribiendo el número o nombre de la opción que elegiste.'
+  );
 }
 
 export function needsAddressCollection(formData) {
