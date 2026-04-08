@@ -8,7 +8,7 @@
  *
  * La reactivación la gestiona deadman.js cuando expira el timer.
  */
-export async function handlePaused(_ctx) {
+export async function handlePaused() {
   // No hacer nada intencionalmente.
   // Si el encargado quiere extender, escribe EXTENDER en el número admin.
   // Eso lo maneja el router de admin (bot/router.js), no la FSM del cliente.

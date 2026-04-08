@@ -56,6 +56,7 @@ export class Sender {
         messageIds.map(id => ({ remoteJid: jid, id }))
       );
     } catch {
+      /* ignorar error de lectura */
     }
   }
 }

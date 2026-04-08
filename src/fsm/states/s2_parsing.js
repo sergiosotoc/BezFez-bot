@@ -8,8 +8,6 @@ import {
   getMissingFieldMessage,
 } from '../../parsers/formParser.js';
 
-const INVOICE_QUESTION = `¿Necesitas factura?\n1. Sí\n2. No`;
-
 function rescueDimensions(data) {
   if (data.largo && data.ancho && data.alto)
     return data;
@@ -78,21 +76,4 @@ export async function handleParsingData(ctx) {
   }
 
   await sender.sendText(chatId, getMissingFieldMessage(missing));
-}
-
-async function advanceToInvoice(ctx, formData) {
-  const { chatId, sender } = ctx;
-
-  const safeData = rescueDimensions(formData);
-
-  const { success } = await transitionState(
-    chatId,
-    'AWAITING_FORMAT',
-    'AWAITING_INVOICE',
-    { form_data: safeData }
-  );
-
-  if (!success) return;
-
-  await sender.sendText(chatId, INVOICE_QUESTION);
 }

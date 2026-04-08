@@ -88,7 +88,8 @@ export function formatAdminSummary({
   const rawJid = clientJid.replace('@s.whatsapp.net', '').replace('@lid', '');
   const isRealPhone = /^\d{10,15}$/.test(clientPhone);
 
-  let phone = null;
+  let phone;
+  
   if (isRealPhone) {
     phone = clientPhone;
   } else if (clientPhone?.startsWith('lid:')) {

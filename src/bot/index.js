@@ -12,7 +12,7 @@ import pino from 'pino';
 
 import { Sender } from './sender.js';
 import { route, lidToPhoneMap } from './router.js';
-import { injectSender, restoreTimers } from '../services/deadman.js';
+import { initDeadman, restoreTimers } from '../services/deadman.js';
 import { cleanExpiredMessages } from '../services/supabase.js';
 import { ensureBucketExists } from '../services/storage.js';
 import { logger } from '../config/logger.js';
@@ -54,6 +54,7 @@ export async function startBot() {
   });
 
   const sender = new Sender(sock);
+  initDeadman(sender);
 
   sock.ev.on('chats.phoneNumberShare', ({ lid, jid }) => {
     try {
@@ -78,12 +79,6 @@ export async function startBot() {
       logger.warn({ err: err.message }, 'Error en phoneNumberShare');
     }
   });
-
-  sock.ev.on('chats.phoneNumberShare', (data) => {
-    console.log('🔥 phoneNumberShare:', data);
-  });
-
-  injectSender(sender);
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
@@ -118,23 +113,30 @@ export async function startBot() {
     }
   });
 
+  let credsUpdateTimeout = null;
+
   sock.ev.on('creds.update', async () => {
     await saveCreds();
 
-    try {
-      await uploadAuthToSupabase();
-    } catch (err) {
-      logger.error({ err: err.message }, 'Error subiendo auth a Supabase (no crítico)');
-    }
+    clearTimeout(credsUpdateTimeout);
+    credsUpdateTimeout = setTimeout(async () => {
+      try {
+        await uploadAuthToSupabase();
+      } catch (err) {
+        logger.error({ err: err.message }, 'Error subiendo auth a Supabase (no crítico)');
+      }
+    }, 2000);
   });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
 
     for (const rawMessage of messages) {
-      route(rawMessage, sender, sock).catch(err => {
+      try {
+        await route(rawMessage, sender, sock);
+      } catch (err) {
         logger.error({ err: err.message }, 'Error no capturado en route()');
-      });
+      }
     }
   });
 

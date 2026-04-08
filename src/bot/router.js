@@ -1,6 +1,5 @@
 /* src/bot/router.js */
 import { markMessageProcessed } from '../services/supabase.js';
-import { extendPause } from '../services/deadman.js';
 import { dispatch } from '../fsm/machine.js';
 import { config } from '../config/index.js';
 import { logger } from '../config/logger.js';
@@ -134,3 +133,26 @@ function extractText(msg, messageType) {
   if (messageType === 'documentMessage') return msg.documentMessage?.caption || null;
   return null;
 }
+
+async function handleAdminMessage({ chatId, text, sender }) {
+  const msg = text.trim().toUpperCase();
+  
+  if (ADMIN_COMMANDS.EXTENDER.test(msg)) {
+    await sender.sendText(chatId, '⚠️ Para extender el tiempo, debes especificar el cliente (Lógica pendiente de implementar).');
+    return;
+  }
+  
+  if (ADMIN_COMMANDS.FINALIZADO.test(msg)) {
+    await sender.sendText(chatId, '✅ Proceso finalizado.');
+    return;
+  }
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [chatId, data] of rateLimitMap.entries()) {
+    if (now - data.lastMessage > 60000) {
+      rateLimitMap.delete(chatId);
+    }
+  }
+}, 10 * 60 * 1000); 

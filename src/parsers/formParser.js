@@ -7,7 +7,7 @@ function normalize(str) {
     .toLowerCase();
 }
 
-function normalizePhone(phone) {
+export function normalizePhone(phone) {
   if (!phone) return null;
 
   // Eliminar todos los caracteres no numéricos
@@ -160,7 +160,7 @@ function parsePersonBlock(block) {
     const n = norm(line);
 
     // Saltar encabezados de bloque
-    if (/^(remitente|destinatario|receptor|envia|datos\s+de)/.test(n)) continue;
+    if (/^(remitente|destinatario|receptor|envia|datos\s+de|origen|destino)/.test(n)) continue;
 
     // 1. TELÉFONO (Prioridad Alta)
     // Buscamos etiquetas como Tel, Cel, Whatsapp seguidas de números, 
@@ -250,7 +250,7 @@ function parsePersonBlock(block) {
   // ciudad: si queda algo con coma o palabras de estado
   if (!data.ciudad && posQueue.length > 0) {
     const ciudadIdx = posQueue.findIndex(l =>
-      !l.toLowerCase().startsWith('col') && 
+      !l.toLowerCase().startsWith('col') &&
       !/\d{5}/.test(l) &&
       (l.includes(',') || l.split(' ').length >= 2)
     );
@@ -269,8 +269,6 @@ function parsePersonBlock(block) {
 
 export function parseFormatoLibre(text) {
   const data = {};
-
-  const allLines = text.split('\n').map(l => l.trim()).filter(Boolean);
 
   // Extraer bloques de origen y destino
   const origenBlock = extractBlock(
@@ -327,9 +325,22 @@ export function parseFormatoLibre(text) {
     if (peso > 0 && peso <= 1000) data.peso = peso;
   }
 
+  // 📦 Extraer contenido (Etiqueta explícita o deducido de la última línea)
   const contenidoMatch = text.match(/contenido\s*[:\s]\s*(.+)/i);
+  let posibleContenido = null;
+
   if (contenidoMatch) {
-    const posibleContenido = contenidoMatch[1].trim();
+    posibleContenido = contenidoMatch[1].trim();
+  } else {
+    const lineas = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const ultimaLinea = lineas[lineas.length - 1];
+
+    if (ultimaLinea && !/\d/.test(ultimaLinea) && ultimaLinea.length >= 3 && ultimaLinea.length <= 40) {
+      posibleContenido = ultimaLinea;
+    }
+  }
+
+  if (posibleContenido) {
     const palabrasInvalidas = [
       'destinatario', 'remitente', 'paquete', 'producto', 'articulo',
       'medidas', 'peso', 'contenido', 'origen', 'destino', 'cliente',
@@ -478,7 +489,7 @@ export function mergeFormData(prev = {}, next = {}) {
   return result;
 }
 
-export function parsePartialResponse(text, fieldKeys = []) {
+export function parsePartialResponse(text) {
   const result = {};
   const cleanText = text.replace(/\*/g, '').trim();
 

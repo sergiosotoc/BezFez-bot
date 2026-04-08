@@ -1,6 +1,9 @@
 /* src/fsm/states/s4b_address.js */
 import { transitionState, updateSession } from '../../services/supabase.js';
-import { parseForm, mergeFormData } from '../../parsers/formParser.js';
+import { mergeFormData, normalizePhone } from '../../parsers/formParser.js';
+import { formatAdminSummary } from '../../services/calculator.js';
+import { startPause } from '../../services/deadman.js';
+import { config } from '../../config/index.js';
 
 const REQUIRED_FIELDS = [
   'nombre_origen',
@@ -137,7 +140,7 @@ export async function handleAwaitingAddress(ctx) {
   const { chatId, text, session, sender } = ctx;
   if (!text) return;
 
-  const { form_data, selected_carrier, total_amount, invoice_required, billable_weight, oversize_charge } = session;
+  const { form_data } = session;
 
   // Asegurar que form_data tenga las medidas y peso iniciales
   if (!form_data.medidas && session.form_data?.medidas) {
@@ -194,7 +197,7 @@ export async function handleAwaitingAddress(ctx) {
       merged[fieldToFill] = value;
     }
     else if (fieldToFill === 'cel_origen' || fieldToFill === 'cel_destino') {
-      const cleaned = cleanPhone(value);
+      const cleaned = normalizePhone(value);
       if (cleaned) {
         merged[fieldToFill] = cleaned;
       } else {
@@ -223,7 +226,6 @@ export async function handleAwaitingAddress(ctx) {
 
   const missingAfter = getMissingFields(merged);
 
-  // Guardar progreso
   await updateSession(chatId, { form_data: merged });
 
   if (missingAfter.length > 0) {
@@ -231,19 +233,42 @@ export async function handleAwaitingAddress(ctx) {
     return;
   }
 
-  await transitionState(
-    chatId,
-    'AWAITING_ADDRESS',
-    'AWAITING_SELECTION',
-    {
-      form_data: merged
-    }
-  );
+  const { selected_carrier, total_amount, invoice_required, billable_weight, oversize_charge } = session;
 
+  if (selected_carrier) {
+    const folio = `PED-${Date.now()}`;
+    const adminSummary = formatAdminSummary({
+      folio,
+      carrier: selected_carrier,
+      total: total_amount,
+      clientJid: chatId,
+      clientPhone: ctx.clientPhone,
+      pushName: ctx.pushName,
+      formData: merged,
+      calc: { pesoFacturable: billable_weight, oversize: (oversize_charge || 0) > 0 },
+      invoice: invoice_required,
+    });
+
+    await sender.sendText(config.admin.jid, adminSummary);
+
+    await sender.sendText(
+      chatId,
+      `✅ *Tu solicitud fue enviada correctamente*\n\nTu guía será generada por un asesor.\n\n📲 En breve recibirás atención personalizada.\nSi hay algún ajuste en el precio, se te notificará antes de generar la guía.`
+    );
+
+    await transitionState(chatId, 'AWAITING_ADDRESS', 'PAUSED', { form_data: merged });
+    await startPause(chatId, folio, ctx.pushName || chatId);
+    return;
+  }
+
+  await transitionState(
+    chatId, 
+    'AWAITING_ADDRESS', 
+    'AWAITING_SELECTION', 
+    { form_data: merged });
   await sender.sendText(
-    chatId,
-    'Perfecto 👍 Ya tengo todos los datos.\n\nAhora confirma tu paquetería escribiendo el número o nombre de la opción que elegiste.'
-  );
+    chatId, 
+    'Perfecto 👍 Ya tengo todos los datos.\n\nAhora confirma tu paquetería escribiendo el número o nombre de la opción que elegiste.');
 }
 
 export function needsAddressCollection(formData) {

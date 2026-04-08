@@ -1,7 +1,7 @@
 // clearStorage.js
 
-/* se corre asi node clearStorage.js */
-import 'dotenv/config'   // 👈 carga automáticamente tu .env
+/* se corre asi: node clearStorage.js */
+import 'dotenv/config'
 import { createClient } from '@supabase/supabase-js'
 
 const SUPABASE_URL = process.env.SUPABASE_URL

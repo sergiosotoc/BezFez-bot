@@ -9,7 +9,6 @@ import {
   getMissingFields
 } from '../../parsers/formParser.js';
 import { calcBillableWeight, buildQuotes, formatQuoteMessage } from '../../services/calculator.js';
-import { config } from '../../config/index.js';
 import { logger } from '../../config/logger.js';
 
 const AMBIGUOUS_MSG = `Para darte el precio exacto necesito saber si requieres factura.

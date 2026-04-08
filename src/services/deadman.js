@@ -14,7 +14,7 @@ const timers = new Map();
 
 // sender se inyecta después del boot para evitar dependencias circulares
 let _sender = null;
-export function injectSender(sender) { _sender = sender; }
+export function initDeadman(sender) { _sender = sender; }
 
 // ─────────────────────────────────────────────────────────
 // INICIAR PAUSA
@@ -28,12 +28,12 @@ export function injectSender(sender) { _sender = sender; }
  * @param {string} clientName
  */
 export async function startPause(chatId, folio, clientName) {
-  const now       = Date.now();
+  const now = Date.now();
   const expiresAt = new Date(now + config.pauseDurationMs);
 
   await updateSession(chatId, {
-    state:           'PAUSED',
-    paused_at:       new Date(now).toISOString(),
+    state: 'PAUSED',
+    paused_at: new Date(now).toISOString(),
     pause_expires_at: expiresAt.toISOString(),
   });
 
@@ -117,8 +117,8 @@ export async function restoreTimers() {
 function scheduleTimers(chatId, folio, clientName, durationMs) {
   clearTimers(chatId);
 
-  const remindDelay  = Math.max(0, durationMs - (config.pauseDurationMs - config.reminderOffsetMs));
-  const expireDelay  = durationMs;
+  const remindDelay = Math.max(0, durationMs - (config.pauseDurationMs - config.reminderOffsetMs));
+  const expireDelay = durationMs;
 
   const remind = setTimeout(() => sendReminder(chatId, clientName), remindDelay);
   const expire = setTimeout(() => endPause(chatId), expireDelay);
