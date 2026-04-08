@@ -3,6 +3,7 @@ import { markMessageProcessed } from '../services/supabase.js';
 import { dispatch } from '../fsm/machine.js';
 import { config } from '../config/index.js';
 import { logger } from '../config/logger.js';
+import { extendPause, endPause } from '../services/deadman.js';
 
 const rateLimitMap = new Map();
 export const lidToPhoneMap = new Map();
@@ -105,7 +106,7 @@ export async function route(rawMessage, sender, sock) {
   logger.info({ chatId, clientPhone, pushName, messageType, textPreview: text?.slice(0, 60) }, 'Mensaje recibido');
 
   if (chatId === config.admin.jid) {
-    return handleAdminMessage({ chatId, text, sender });
+    return handleAdminMessage({ chatId, text, sender, rawMessage });
   }
 
   const ctx = { chatId, clientPhone, pushName, messageType, text, message: msg, rawMessage, sender };
@@ -113,7 +114,7 @@ export async function route(rawMessage, sender, sock) {
     await dispatch(ctx);
   } catch (err) {
     logger.error({ chatId, err: err.message, stack: err.stack }, 'Error no manejado en FSM');
-    await sender.sendText(chatId, 'Ocurrió un error inesperado. Escribe "hola" para reiniciar.').catch(() => {});
+    await sender.sendText(chatId, 'Ocurrió un error inesperado. Escribe "hola" para reiniciar.').catch(() => { });
   }
 }
 
@@ -134,17 +135,36 @@ function extractText(msg, messageType) {
   return null;
 }
 
-async function handleAdminMessage({ chatId, text, sender }) {
+async function handleAdminMessage({ chatId, text, sender, rawMessage }) {
   const msg = text.trim().toUpperCase();
-  
-  if (ADMIN_COMMANDS.EXTENDER.test(msg)) {
-    await sender.sendText(chatId, '⚠️ Para extender el tiempo, debes especificar el cliente (Lógica pendiente de implementar).');
+
+  const isExtender = ADMIN_COMMANDS.EXTENDER.test(msg);
+  const isFinalizado = ADMIN_COMMANDS.FINALIZADO.test(msg);
+
+  if (!isExtender && !isFinalizado) return;
+
+  const contextInfo = rawMessage.message?.extendedTextMessage?.contextInfo;
+  const quotedMessage = contextInfo?.quotedMessage;
+  const quotedText = quotedMessage?.conversation || quotedMessage?.extendedTextMessage?.text;
+
+  if (!quotedText) {
+    await sender.sendText(chatId, '⚠️ Para usar este comando, debes *responder* al ticket del cliente.');
     return;
   }
-  
-  if (ADMIN_COMMANDS.FINALIZADO.test(msg)) {
-    await sender.sendText(chatId, '✅ Proceso finalizado.');
+
+  const idMatch = quotedText.match(/ID:\s*([^\s]+)/);
+  if (!idMatch) {
+    await sender.sendText(chatId, '⚠️ No pude encontrar el ID del cliente en el ticket citado.');
     return;
+  }
+
+  const targetJid = idMatch[1];
+
+  if (isFinalizado) {
+    await endPause(targetJid);
+    await sender.sendText(chatId, '✅ Sesión del cliente liberada exitosamente. El bot lo volverá a atender.');
+  } else if (isExtender) {
+    await extendPause(targetJid);
   }
 }
 
@@ -155,4 +175,4 @@ setInterval(() => {
       rateLimitMap.delete(chatId);
     }
   }
-}, 10 * 60 * 1000); 
+}, 10 * 60 * 1000);

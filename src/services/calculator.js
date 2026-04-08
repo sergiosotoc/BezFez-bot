@@ -89,7 +89,7 @@ export function formatAdminSummary({
   const isRealPhone = /^\d{10,15}$/.test(clientPhone);
 
   let phone;
-  
+
   if (isRealPhone) {
     phone = clientPhone;
   } else if (clientPhone?.startsWith('lid:')) {
@@ -163,6 +163,8 @@ export function formatAdminSummary({
     waLink
       ? `📲 *Enviar guía al cliente:*\n${waLink}`
       : `📲 *Chat cliente:* ${clientJid}`,
+    '',
+    `🆔 ID: ${clientJid}`
   ];
 
   return lines.join('\n');

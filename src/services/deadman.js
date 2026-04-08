@@ -148,16 +148,8 @@ async function sendReminder(chatId, clientName) {
   await _sender.sendText(config.admin.jid, msg);
 }
 
-async function endPause(chatId) {
+export async function endPause(chatId) {
   clearTimers(chatId);
   await resetSession(chatId);
-  logger.info({ chatId }, 'Pausa finalizada — sesión reseteada');
-
-  // Opcionalmente notificar al cliente que puede iniciar una nueva cotización
-  if (_sender) {
-    await _sender.sendText(
-      chatId,
-      'Hola, el encargado ya procesó tu pedido. Si necesitas otra cotización, escríbenos cuando gustes. 😊'
-    ).catch(err => logger.warn({ err: err.message }, 'No se pudo enviar mensaje de fin de pausa'));
-  }
+  logger.info({ chatId }, 'Pausa finalizada en silencio — sesión reseteada');
 }
