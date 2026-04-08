@@ -105,8 +105,12 @@ export async function route(rawMessage, sender, sock) {
 
   logger.info({ chatId, clientPhone, pushName, messageType, textPreview: text?.slice(0, 60) }, 'Mensaje recibido');
 
-  if (chatId === config.admin.jid) {
-    return handleAdminMessage({ chatId, text, sender, rawMessage });
+  const cleanAdminPhone = config.admin.phone.replace(/\D/g, '');
+  const isAdmin = (chatId === config.admin.jid) || (clientPhone && clientPhone.includes(cleanAdminPhone));
+
+  if (isAdmin) {
+    const wasCommand = await handleAdminMessage({ chatId, text, sender, rawMessage });
+    if (wasCommand) return;
   }
 
   const ctx = { chatId, clientPhone, pushName, messageType, text, message: msg, rawMessage, sender };
@@ -136,12 +140,12 @@ function extractText(msg, messageType) {
 }
 
 async function handleAdminMessage({ chatId, text, sender, rawMessage }) {
-  const msg = text.trim().toUpperCase();
+  const msg = text?.trim().toUpperCase() || '';
 
   const isExtender = ADMIN_COMMANDS.EXTENDER.test(msg);
   const isFinalizado = ADMIN_COMMANDS.FINALIZADO.test(msg);
 
-  if (!isExtender && !isFinalizado) return;
+  if (!isExtender && !isFinalizado) return false;
 
   const contextInfo = rawMessage.message?.extendedTextMessage?.contextInfo;
   const quotedMessage = contextInfo?.quotedMessage;
@@ -149,23 +153,26 @@ async function handleAdminMessage({ chatId, text, sender, rawMessage }) {
 
   if (!quotedText) {
     await sender.sendText(chatId, '⚠️ Para usar este comando, debes *responder* al ticket del cliente.');
-    return;
+    return true;
   }
 
   const idMatch = quotedText.match(/ID:\s*([^\s]+)/);
   if (!idMatch) {
     await sender.sendText(chatId, '⚠️ No pude encontrar el ID del cliente en el ticket citado.');
-    return;
+    return true;
   }
 
   const targetJid = idMatch[1];
 
+  // 3. Ejecutar la acción
   if (isFinalizado) {
     await endPause(targetJid);
     await sender.sendText(chatId, '✅ Sesión del cliente liberada exitosamente. El bot lo volverá a atender.');
   } else if (isExtender) {
     await extendPause(targetJid);
   }
+
+  return true;
 }
 
 setInterval(() => {

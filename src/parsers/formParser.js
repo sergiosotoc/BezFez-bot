@@ -325,7 +325,6 @@ export function parseFormatoLibre(text) {
     if (peso > 0 && peso <= 1000) data.peso = peso;
   }
 
-  // 📦 Extraer contenido (Etiqueta explícita o deducido de la última línea)
   const contenidoMatch = text.match(/contenido\s*[:\s]\s*(.+)/i);
   let posibleContenido = null;
 
@@ -358,10 +357,6 @@ export function parseFormatoLibre(text) {
       data.contenido = posibleContenido;
     }
   }
-
-  // IMPORTANTE: NO asignar contenido por defecto
-  // Si no se encontró contenido válido, simplemente no se incluye en data
-  // Esto hará que el bot lo solicite explícitamente
 
   return data;
 }
@@ -573,9 +568,9 @@ export function getMissingFieldMessage(missingFields) {
     cp_origen: '📍 Envíame el *CP de origen* (5 dígitos)',
     cp_destino: '📍 Envíame el *CP de destino* (5 dígitos)',
     medidas: '📦 Envíame las *medidas* (ej: 60x40x30)',
-    peso: '⚖️ Envíame el *peso en kg* (ej: 5 o 5kg)',
+    peso: '⚖️ Envíame el *peso en kg* (ej: 5kg)',
     largo: '📦 Envíame las *medidas completas* (ej: 30x20x15)',
-    cel_origen: '📱 Envíame el *teléfono del remitente*',
+    cel_origen: '📱 Envíame el *teléfono de la persona que envía*',
     contenido: '📦 ¿Qué contiene el paquete?',
   };
 
@@ -583,7 +578,7 @@ export function getMissingFieldMessage(missingFields) {
     return messages[missingFields[0]];
   }
 
-  return `Me faltan estos datos:\n\n${missingFields.map(f => '• ' + (messages[f] || f.replace(/_/g, ' '))).join('\n')}`;
+  return `Me facilitas estos datos estos datos:\n\n${missingFields.map(f => '• ' + (messages[f] || f.replace(/_/g, ' '))).join('\n')}`;
 }
 
 export function getMissingFields(data) {
@@ -729,13 +724,11 @@ export function parseFlexibleInput(text) {
     cpDestino = cpDestino || match[2];
   }
 
-  // 🔥 CASO CLAVE: solo viene un CP
   const allCPs = norm.match(/\b\d{5}\b/g);
 
   if (allCPs && allCPs.length === 1) {
     const cp = allCPs[0];
 
-    // 👉 NO sobrescribir si ya existe
     if (!data.cp_origen) {
       data.cp_origen = cp;
     } else if (!data.cp_destino) {
