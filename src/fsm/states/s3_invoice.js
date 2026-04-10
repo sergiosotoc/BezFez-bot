@@ -6,10 +6,34 @@ import {
   detectUserInput,
   mergeFormData,
   getMissingFieldMessage,
-  getMissingFields
+  getMissingFields,
+  parseFormatoLibre
 } from '../../parsers/formParser.js';
 import { calcBillableWeight, buildQuotes, formatQuoteMessage } from '../../services/calculator.js';
 import { logger } from '../../config/logger.js';
+
+function extractAddressData(text) {
+  if (!text || text.length < 30) return {};
+
+  const libreData = parseFormatoLibre(text);
+  const addressFields = [
+    'nombre_origen', 'calle_origen', 'colonia_origen', 'ciudad_origen', 'cp_origen', 'cel_origen',
+    'nombre_destino', 'calle_destino', 'colonia_destino', 'ciudad_destino', 'cp_destino', 'cel_destino',
+    'contenido'
+  ];
+
+  const extracted = {};
+  for (const field of addressFields) {
+    if (libreData[field]) {
+      extracted[field] = libreData[field];
+    }
+  }
+
+  if (libreData.medidas) extracted.medidas = libreData.medidas;
+  if (libreData.peso) extracted.peso = libreData.peso;
+
+  return extracted;
+}
 
 const AMBIGUOUS_MSG = `Para darte el precio exacto necesito saber si requieres factura.
 
@@ -53,6 +77,13 @@ export async function handleAwaitingInvoice(ctx) {
   const detection = detectUserInput(text);
   let currentFormData = session?.form_data || {};
 
+  if (text.length > 50) {
+    const addressData = extractAddressData(text);
+    if (Object.keys(addressData).length > 0) {
+      currentFormData = mergeFormData(currentFormData, addressData);
+    }
+  }
+
   if (detection.hasAnyData) {
     currentFormData = mergeFormData(currentFormData, detection.data);
     await updateSession(
@@ -61,6 +92,9 @@ export async function handleAwaitingInvoice(ctx) {
         form_data: currentFormData
       });
   }
+
+  await updateSession(chatId, { form_data: currentFormData });
+
 
   const answer = parseInvoiceResponse(text);
 

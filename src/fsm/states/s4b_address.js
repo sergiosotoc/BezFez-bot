@@ -98,6 +98,53 @@ const SINGLE_FIELD_PROMPT = {
   contenido: '📦 ¿Qué *contenido* tiene el paquete? (ej: ropa, electrónicos, documentos, etc.)',
 };
 
+async function assignRequestedFieldValue({ chatId, sender, fieldToFill, value, merged }) {
+  if (!fieldToFill) return false;
+
+  if (fieldToFill === 'contenido') {
+    const contenidoLower = value.toLowerCase();
+    const palabrasProhibidas = ['destinatario', 'remitente', 'paquete', 'producto'];
+
+    if (palabrasProhibidas.includes(contenidoLower) || value.length < 3) {
+      await sender.sendText(chatId, `âš ï¸ Por favor, especifica un *contenido vÃ¡lido* para el paquete (ej: ropa, libros, electrÃ³nicos, documentos, etc.)\n\n${SINGLE_FIELD_PROMPT.contenido}`);
+      return false;
+    }
+
+    merged[fieldToFill] = value;
+    return true;
+  }
+
+  if (fieldToFill === 'cel_origen' || fieldToFill === 'cel_destino') {
+    const cleaned = normalizePhone(value);
+    if (!cleaned) {
+      await sender.sendText(chatId, `âš ï¸ TelÃ©fono invÃ¡lido. Debe tener 10 dÃ­gitos (ej: 5512345678 o 55 1234 5678)\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
+      return false;
+    }
+
+    merged[fieldToFill] = cleaned;
+    return true;
+  }
+
+  if (fieldToFill === 'cp_origen' || fieldToFill === 'cp_destino') {
+    const cp = value.replace(/\D/g, '');
+    if (cp.length !== 5) {
+      await sender.sendText(chatId, `âš ï¸ CP invÃ¡lido. Debe ser 5 dÃ­gitos (ej: 44620)\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
+      return false;
+    }
+
+    merged[fieldToFill] = cp;
+    return true;
+  }
+
+  if (value.length < 2) {
+    await sender.sendText(chatId, `âš ï¸ El campo debe tener al menos 2 caracteres.\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
+    return false;
+  }
+
+  merged[fieldToFill] = value;
+  return true;
+}
+
 function buildAddressForm(missingFields) {
   // Si solo falta el contenido, preguntar directamente
   if (missingFields.length === 1 && missingFields[0] === 'contenido') {
@@ -152,6 +199,9 @@ export async function handleAwaitingAddress(ctx) {
   }
 
   let merged = { ...form_data };
+  const missingBefore = getMissingFields(merged);
+  const fieldToFill = missingBefore[0];
+  const value = text.trim();
 
   const lineCount = text.split('\n').filter(l => l.trim()).length;
   const hasFormatoLibre = text.length > 30 || lineCount >= 3;
@@ -180,43 +230,50 @@ export async function handleAwaitingAddress(ctx) {
     });
 
     merged = mergeFormData(merged, libreData);
-  } else {
-    const missingBefore = getMissingFields(merged);
-    const fieldToFill = missingBefore[0];
-    const value = text.trim();
 
-    if (fieldToFill === 'contenido') {
+    if (fieldToFill && !merged[fieldToFill]) {
+      const assigned = await assignRequestedFieldValue({ chatId, sender, fieldToFill, value, merged });
+      if (!assigned) return;
+    }
+  } else {
+    const assigned = await assignRequestedFieldValue({ chatId, sender, fieldToFill, value, merged });
+    if (!assigned) return;
+    const missingBeforeLegacy = getMissingFields(merged);
+    const fieldToFillLegacy = missingBeforeLegacy[0];
+    const valueLegacy = text.trim();
+
+    if (fieldToFillLegacy === 'contenido') {
       // Validación especial para contenido
-      const contenidoLower = value.toLowerCase();
+      const contenidoLower = valueLegacy.toLowerCase();
       const palabrasProhibidas = ['destinatario', 'remitente', 'paquete', 'producto'];
 
-      if (palabrasProhibidas.includes(contenidoLower) || value.length < 3) {
+      if (palabrasProhibidas.includes(contenidoLower) || valueLegacy.length < 3) {
         await sender.sendText(chatId, `⚠️ Por favor, especifica un *contenido válido* para el paquete (ej: ropa, libros, electrónicos, documentos, etc.)\n\n${SINGLE_FIELD_PROMPT.contenido}`);
         return;
       }
-      merged[fieldToFill] = value;
+      merged[fieldToFillLegacy] = valueLegacy;
     }
-    else if (fieldToFill === 'cel_origen' || fieldToFill === 'cel_destino') {
-      const cleaned = normalizePhone(value);
+    else if (fieldToFillLegacy === 'cel_origen' || fieldToFillLegacy === 'cel_destino') {
+      const cleaned = normalizePhone(valueLegacy);
       if (cleaned) {
-        merged[fieldToFill] = cleaned;
+        merged[fieldToFillLegacy] = cleaned;
       } else {
         await sender.sendText(chatId, `⚠️ Teléfono inválido. Debe tener 10 dígitos (ej: 5512345678 o 55 1234 5678)\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
         return;
       }
     }
-    else if (fieldToFill === 'cp_origen' || fieldToFill === 'cp_destino') {
-      const cp = value.replace(/\D/g, '');
+    else if (fieldToFillLegacy === 'cp_origen' || fieldToFillLegacy === 'cp_destino') {
+      const cp = valueLegacy.replace(/\D/g, '');
       if (cp.length === 5) {
-        merged[fieldToFill] = cp;
+        merged[fieldToFillLegacy] = cp;
       } else {
         await sender.sendText(chatId, `⚠️ CP inválido. Debe ser 5 dígitos (ej: 44620)\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
         return;
       }
     }
     else {
-      if (value.length >= 2) {
-        merged[fieldToFill] = value;
+      if (valueLegacy.length >= 2) {
+        merged[fieldToFillLegacy] = valueLegacy;
       } else {
         await sender.sendText(chatId, `⚠️ El campo debe tener al menos 2 caracteres.\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
         return;

@@ -80,6 +80,8 @@ export async function startBot() {
     }
   });
 
+  let retryDelay = 5000; // 5 segundos iniciales
+
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
@@ -97,19 +99,34 @@ export async function startBot() {
       logger.warn({ statusCode, shouldReconnect }, 'Conexión cerrada');
 
       if (shouldReconnect) {
-        logger.info('Reconectando en 5 segundos...');
-        setTimeout(startBot, 5000);
+        try {
+          sock.end(new Error('Reconnecting')); // cerrar socket actual
+        } catch (err) {
+          logger.warn({ err: err.message }, 'Error cerrando socket antes de reconectar');
+        }
+
+        logger.info(`Reconectando en ${retryDelay / 1000} segundos...`);
+        setTimeout(() => {
+          startBot();
+          retryDelay = Math.min(retryDelay * 2, 60000); // máximo 1 minuto
+        }, retryDelay);
       } else {
-        logger.error('Sesión cerrada. Elimina auth_info y reinicia.');
+        logger.error('Sesión cerrada definitivamente. Elimina auth_info y reinicia.');
         process.exit(1);
       }
     }
 
     if (connection === 'open') {
       logger.info('✅ Bot conectado a WhatsApp');
+      retryDelay = 5000; // resetear delay al reconectar bien
 
       await restoreTimers();
       logger.info('Timers de pausa restaurados');
+
+      // Mantener sesión viva con presence update
+      setInterval(() => {
+        sock.sendPresenceUpdate('available').catch(() => { });
+      }, 20000);
     }
   });
 

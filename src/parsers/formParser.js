@@ -27,6 +27,13 @@ export function normalizePhone(phone) {
   return cleaned.length === 10 ? cleaned : null;
 }
 
+function extractTenDigitPhone(text) {
+  if (!text) return null;
+
+  const match = String(text).match(/(?:^|[^\d])((?:\d[\s\-()]*){10})(?!\d)/);
+  return match ? normalizePhone(match[1]) : null;
+}
+
 function extractField(originalText, normText, ...patterns) {
   for (const pattern of patterns) {
     const match = normText.match(pattern);
@@ -134,11 +141,13 @@ function isFormatoLibre(text) {
 }
 
 function extractBlock(text, startPattern, endPattern) {
-  const start = text.search(startPattern);
+  const normText = normalize(text);
+  const start = normText.search(startPattern);
   if (start === -1) return '';
 
   const afterStart = text.slice(start);
-  const end = afterStart.slice(1).search(endPattern);
+  const afterStartNorm = normText.slice(start);
+  const end = afterStartNorm.slice(1).search(endPattern);
 
   if (end === -1) return afterStart;
   return afterStart.slice(0, end + 1);
@@ -152,24 +161,36 @@ function parsePersonBlock(block) {
 
   const data = {};
   const norm = (s) => normalize(s);
-
-  // --- Líneas que NO deben procesarse como dirección ---
   const untagged = [];
 
   for (const line of lines) {
     const n = norm(line);
+    const originalLine = line.trim();
 
-    // Saltar encabezados de bloque
-    if (/^(remitente|destinatario|receptor|envia|datos\s+de|origen|destino)/.test(n)) continue;
+    // Saltar encabezados de bloque (incluye variantes con tilde)
+    if (/^(remitente|destinatario|receptor|envia|datos\s+de|origen|orígen|destino)/i.test(n)) {
+      continue;
+    }
 
-    // 1. TELÉFONO (Prioridad Alta)
-    // Buscamos etiquetas como Tel, Cel, Whatsapp seguidas de números, 
-    // permitiendo puntos o espacios intermedios (ej: "Tel.33...")
-    const telMatch = line.match(/(?:cel(?:ular)?|tel(?:e?fono)?|whatsapp|movil|móvil)\s*\.?\s*[:\s]*([\d\s\-+()]{7,})/i);
+    // 1. NOMBRE
+    const nombreMatch = line.match(/^nombre\s*:?\s*(.+)/i) ||
+                        line.match(/^nombre\s+(?:completo|origen|destino)?\s*:?\s*(.+)/i);
+    if (nombreMatch) {
+      data.nombre = nombreMatch[1].trim();
+      continue;
+    }
 
-    // También validamos si la línea es un número puro de 10-12 dígitos (limpiando basura)
+    // 2. DIRECCIÓN / CALLE
+    const direccionMatch = line.match(/^(?:direccion|dirección|calle|domicilio|address)\s*:?\s*(.+)/i);
+    if (direccionMatch) {
+      data.calle = direccionMatch[1].trim();
+      continue;
+    }
+
+    // 3. TELÉFONO
+    const telMatch = line.match(/(?:cel(?:ular)?|tel(?:e?fono)?|whatsapp|movil|móvil|tel|num(?:ero)?\s+telefonico)\s*\.?\s*[:\s]*([\d\s\-+()]{7,})/i);
     const digitsOnly = line.replace(/\D/g, '');
-    const isLikelyPhone = /^\d{10}$/.test(digitsOnly);
+    const isLikelyPhone = /^\d{10}$/.test(digitsOnly) && !line.match(/\d{5}/); // evitar confusión con CP
 
     if (telMatch || isLikelyPhone) {
       const phoneRaw = telMatch ? telMatch[1] : digitsOnly;
@@ -180,110 +201,166 @@ function parsePersonBlock(block) {
       }
     }
 
-    // 2. CP (Etiquetado o suelto de 5 dígitos)
-    const cpMatch = n.match(/\bc\.?\s*p\.?\s*[:\s]\s*(\d{5})\b/) ||
-      n.match(/\bcp\s*[:\s]\s*(\d{5})\b/) ||
-      n.match(/\bc\.?\s*p\.?\s+(\d{5})\b/) ||
-      (/^\d{5}$/.test(line.trim()) ? [null, line.trim()] : null);
+    // 4. CP
+    const cpMatch = line.match(/\bc\.?\s*p\.?\s*[:\s]?\s*(\d{5})\b/i) ||
+                    line.match(/\bcp\s*[:\s]?\s*(\d{5})\b/i) ||
+                    line.match(/\bc\.?\s*p\.?\s+(\d{5})\b/i) ||
+                    line.match(/codigo\s*postal\s*:?\s*(\d{5})/i) ||
+                    (/^\d{5}$/.test(line.trim()) ? [null, line.trim()] : null);
 
     if (cpMatch) {
       data.cp = cpMatch[1];
       continue;
     }
 
-    // 3. CP (PRIORIDAD SOBRE COLONIA)
-    const cpInline = line.match(/\bcp\.?\s*:?[\s]*(\d{5})\b/i);
-    if (cpInline) {
-      data.cp = cpInline[1];
-      continue;
-    }
-
-    // 4. COLONIA (solo si no es CP)
-    const colMatch = line.match(/^col(?:onia)?\.?\s*(.+)/i);
-
+    // 5. COLONIA
+    const colMatch = line.match(/^col(?:onia)?\.?\s*:?\s*(.+)/i);
     if (colMatch) {
       let value = colMatch[1].trim();
-
       if (!/\b\d{5}\b/.test(value)) {
-        data.colonia = value.replace(/^\.*/, '').trim();
+        data.colonia = value;
       }
-
       continue;
     }
 
-    // 4. CALLE (Etiquetada explícitamente)
-    const calleMatch = line.match(/^calle\s*[:\s]\s*(.+)/i);
-    if (calleMatch) {
-      data.calle = calleMatch[1].trim();
+    // 6. CIUDAD / MUNICIPIO
+    const ciudadMatch = line.match(/^(?:municipio|ciudad|city)\s*:?\s*(.+)/i);
+    if (ciudadMatch) {
+      data.ciudad = ciudadMatch[1].trim();
       continue;
     }
 
-    // 5. ASIGNACIÓN POSICIONAL (Si no es nada de lo anterior)
-    const esContenido = /(?:ropa|zapatos|electronicos|libros|herramientas|documentos|papeles)/i.test(line);
-
-    // Si llegamos aquí y no es contenido, lo guardamos para adivinar qué es
-    if (!esContenido && line.length < 60) {
-      untagged.push(line.trim());
+    // 7. ESTADO
+    const estadoMatch = line.match(/^estado\s*:?\s*(.+)/i);
+    if (estadoMatch) {
+      const estado = estadoMatch[1].trim();
+      if (data.ciudad) {
+        data.ciudad = `${data.ciudad}, ${estado}`;
+      } else {
+        data.ciudad = estado;
+      }
+      continue;
     }
+
+    // Si no coincide con nada, guardar para procesar después
+    untagged.push(originalLine);
   }
+
+  // ─────────────────────────────────────────
+  // PROCESAR LÍNEAS SIN ETIQUETA
+  // ─────────────────────────────────────────
 
   const posQueue = [...untagged];
 
-  // nombre: primera línea que no tenga números (o la primera disponible)
+  // NOMBRE
   if (!data.nombre && posQueue.length > 0) {
-    const nameIdx = posQueue.findIndex(l => !/\d/.test(l));
+    const nameIdx = posQueue.findIndex(l => !/\d/.test(l) && l.length > 2 && !l.includes(','));
     if (nameIdx !== -1) {
       data.nombre = posQueue.splice(nameIdx, 1)[0];
-    } else {
-      data.nombre = posQueue.shift();
     }
   }
 
-  // calle: línea que contenga números (típico de direcciones #123)
+  // TELÃ‰FONO sin etiqueta dentro del bloque
+  if (!data.cel && posQueue.length > 0) {
+    const phoneIdx = posQueue.findIndex(l => !!extractTenDigitPhone(l));
+    if (phoneIdx !== -1) {
+      data.cel = extractTenDigitPhone(posQueue.splice(phoneIdx, 1)[0]);
+    }
+  }
+
+  // CALLE
   if (!data.calle && posQueue.length > 0) {
-    const calleIdx = posQueue.findIndex(l => /\d/.test(l));
+    const calleIdx = posQueue.findIndex(l =>
+      /\d/.test(l) ||
+      /retorno|avenida|av\.|calle|privada|prolongacion|boulevard|blvd|cerrada/i.test(l.toLowerCase())
+    );
     if (calleIdx !== -1) {
       data.calle = posQueue.splice(calleIdx, 1)[0];
     }
   }
 
-  // ciudad: si queda algo con coma o palabras de estado
+  // CIUDAD
   if (!data.ciudad && posQueue.length > 0) {
     const ciudadIdx = posQueue.findIndex(l =>
-      !l.toLowerCase().startsWith('col') &&
-      !/\d{5}/.test(l) &&
-      (l.includes(',') || l.split(' ').length >= 2)
+      l.includes(',') ||
+      /puebla|morelia|cdmx|guadalajara|monterrey|mexico|méxico|durango|nuevo\s+leon|nuevo\s+león/i.test(l.toLowerCase())
     );
     if (ciudadIdx !== -1) {
       data.ciudad = posQueue.splice(ciudadIdx, 1)[0];
     }
   }
 
-  // colonia: lo que sobre
+  // COLONIA
   if (!data.colonia && posQueue.length > 0) {
-    data.colonia = posQueue.shift();
+    const colIdx = posQueue.findIndex(l =>
+      !/\d{5}/.test(l) &&
+      /universal|bartolo|centro|jardines|cerritos|guadalupe|carmelita/i.test(l.toLowerCase())
+    );
+    if (colIdx !== -1) {
+      data.colonia = posQueue.splice(colIdx, 1)[0];
+    }
+  }
+
+  // Fallback genérico: si aún queda una línea de texto válida, tomarla como colonia
+  if (!data.colonia && posQueue.length > 0) {
+    const genericColIdx = posQueue.findIndex(l =>
+      !/\d/.test(l) &&
+      !l.includes(',') &&
+      l.trim().length >= 3
+    );
+    if (genericColIdx !== -1) {
+      data.colonia = posQueue.splice(genericColIdx, 1)[0];
+    }
+  }
+
+  // Limpieza ciudad/estado repetidos
+  if (data.ciudad) {
+    const parts = data.ciudad.split(',').map(p => p.trim());
+    if (parts.length >= 2) {
+      const city = parts[0];
+      const state = parts[1];
+      if (city.toLowerCase() === state.toLowerCase() ||
+          state.toLowerCase().startsWith(city.toLowerCase().substring(0, 3))) {
+        data.ciudad = `${city}, ${state}`;
+      }
+    }
   }
 
   return data;
 }
 
+
 export function parseFormatoLibre(text) {
   const data = {};
 
-  // Extraer bloques de origen y destino
+  // Extraer bloques de origen y destino (con soporte para tildes)
   const origenBlock = extractBlock(
     text,
-    /remitente|envia(nte)?|origen/i,
+    /remitente|envia(?:nte)?|origen|orígen/i,
     /destinatario|destino|recibe|receptor/i
   );
 
   const destinoBlock = extractBlock(
     text,
     /destinatario|destino|recibe|receptor/i,
-    /medidas|peso|contenido|paquete/i
+    /medidas|peso|contenido|paquete|articulos|artículos/i
   );
 
-  if (origenBlock) {
+  // ──────────────── ORIGEN ────────────────
+  if (!origenBlock) {
+    // Fallback: tomar desde inicio hasta antes de "destinatario"
+    const firstBlock = text.split(/destinatario|destino|recibe/i)[0];
+    if (firstBlock && firstBlock.length > 10) {
+      const origen = parsePersonBlock(firstBlock);
+      if (origen.nombre) data.nombre_origen = origen.nombre;
+      if (origen.calle) data.calle_origen = origen.calle;
+      if (origen.colonia) data.colonia_origen = origen.colonia;
+      if (origen.ciudad) data.ciudad_origen = origen.ciudad;
+      if (origen.cp) data.cp_origen = origen.cp;
+      if (origen.cel) data.cel_origen = origen.cel;
+      if (!data.cel_origen) data.cel_origen = extractTenDigitPhone(firstBlock);
+    }
+  } else {
     const origen = parsePersonBlock(origenBlock);
     if (origen.nombre) data.nombre_origen = origen.nombre;
     if (origen.calle) data.calle_origen = origen.calle;
@@ -291,9 +368,16 @@ export function parseFormatoLibre(text) {
     if (origen.ciudad) data.ciudad_origen = origen.ciudad;
     if (origen.cp) data.cp_origen = origen.cp;
     if (origen.cel) data.cel_origen = origen.cel;
-    if (origen.invalid_phone) data.invalid_phone_origen = true;
+    if (!data.cel_origen) data.cel_origen = extractTenDigitPhone(origenBlock);
+
+    // Fallback: si no hay calle, buscar "Dirección:" explícita
+    if (!data.calle_origen) {
+      const dirMatch = origenBlock.match(/(?:direccion|dirección)\s*:?\s*(.+?)(?:\n|$)/i);
+      if (dirMatch) data.calle_origen = dirMatch[1].trim();
+    }
   }
 
+  // ──────────────── DESTINO ────────────────
   if (destinoBlock) {
     const destino = parsePersonBlock(destinoBlock);
     if (destino.nombre) data.nombre_destino = destino.nombre;
@@ -302,10 +386,16 @@ export function parseFormatoLibre(text) {
     if (destino.ciudad) data.ciudad_destino = destino.ciudad;
     if (destino.cp) data.cp_destino = destino.cp;
     if (destino.cel) data.cel_destino = destino.cel;
-    if (destino.invalid_phone) data.invalid_phone_destino = true;
+    if (!data.cel_destino) data.cel_destino = extractTenDigitPhone(destinoBlock);
+
+    // Fallback: si no hay calle, buscar "Dirección:" explícita
+    if (!data.calle_destino) {
+      const dirMatch = destinoBlock.match(/(?:direccion|dirección)\s*:?\s*(.+?)(?:\n|$)/i);
+      if (dirMatch) data.calle_destino = dirMatch[1].trim();
+    }
   }
 
-  // Extraer medidas
+  // ──────────────── MEDIDAS ────────────────
   const medidas = extractMedidas(text);
   if (medidas) {
     data.medidas = medidas;
@@ -317,33 +407,46 @@ export function parseFormatoLibre(text) {
     }
   }
 
-  // Extraer peso
-  const pesoMatch = normalize(text).match(/(\d+(?:\.\d+)?)\s*kg/) ||
-    normalize(text).match(/peso\s*[:\s]\s*(\d+(?:\.\d+)?)/);
-  if (pesoMatch) {
-    const peso = parseFloat(pesoMatch[1]);
-    if (peso > 0 && peso <= 1000) data.peso = peso;
+  // ──────────────── PESO ────────────────
+  const pesoPatterns = [
+    /(\d+(?:\.\d+)?)\s*kg/i,
+    /peso\s*:?\s*(\d+(?:\.\d+)?)/i,
+    /(\d+(?:\.\d+)?)\s*kilos?/i,
+  ];
+  for (const pattern of pesoPatterns) {
+    const match = normalize(text).match(pattern);
+    if (match) {
+      const peso = parseFloat(match[1]);
+      if (peso > 0 && peso <= 1000) {
+        data.peso = peso;
+        break;
+      }
+    }
   }
 
-  const contenidoMatch = text.match(/contenido\s*[:\s]\s*(.+)/i);
+  // ──────────────── CONTENIDO ────────────────
+  const contenidoMatch = text.match(/(?:articulos?|contenido|artículos?)\s*:?\s*(.+?)(?:\n|$)/i);
   let posibleContenido = null;
 
   if (contenidoMatch) {
     posibleContenido = contenidoMatch[1].trim();
   } else {
-    const lineas = text.split('\n').map(l => l.trim()).filter(Boolean);
-    const ultimaLinea = lineas[lineas.length - 1];
-
-    if (ultimaLinea && !/\d/.test(ultimaLinea) && ultimaLinea.length >= 3 && ultimaLinea.length <= 40) {
-      posibleContenido = ultimaLinea;
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    const lastLine = lines[lines.length - 1];
+    if (lastLine &&
+        lastLine.length >= 3 &&
+        lastLine.length <= 40 &&
+        !/\d/.test(lastLine) &&
+        !/[x×]/.test(lastLine)) {
+      posibleContenido = lastLine;
     }
   }
 
   if (posibleContenido) {
     const palabrasInvalidas = [
-      'destinatario', 'remitente', 'paquete', 'producto', 'articulo',
-      'medidas', 'peso', 'contenido', 'origen', 'destino', 'cliente',
-      'envio', 'envió', 'guia', 'guía', 'factura', 'cotizacion',
+      'destinatario','remitente','paquete','producto','articulo','artículos',
+      'medidas','peso','contenido','origen','destino','cliente',
+      'envio','envió','guia','guía','factura','cotizacion','cotización'
     ];
     const valido = (
       posibleContenido.length >= 3 &&
@@ -360,6 +463,7 @@ export function parseFormatoLibre(text) {
 
   return data;
 }
+
 
 
 export function parseForm(text) {

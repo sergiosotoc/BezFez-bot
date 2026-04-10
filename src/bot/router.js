@@ -1,5 +1,5 @@
 /* src/bot/router.js */
-import { markMessageProcessed } from '../services/supabase.js';
+import { markMessageProcessed, resetSession } from '../services/supabase.js';
 import { dispatch } from '../fsm/machine.js';
 import { config } from '../config/index.js';
 import { logger } from '../config/logger.js';
@@ -74,9 +74,10 @@ async function resolveClientPhone(rawMessage, sock) {
 }
 
 export async function route(rawMessage, sender, sock) {
+  const chatId = rawMessage.key.remoteJid;
+  if (chatId === 'status@broadcast') return;
   const msg = rawMessage.message;
   const key = rawMessage.key;
-  const chatId = key.remoteJid;
   const isFromMe = key.fromMe;
 
   if (isFromMe) return;
@@ -104,6 +105,14 @@ export async function route(rawMessage, sender, sock) {
   const text = extractText(msg, messageType);
 
   logger.info({ chatId, clientPhone, pushName, messageType, textPreview: text?.slice(0, 60) }, 'Mensaje recibido');
+
+  const normalizedText = text?.trim().toLowerCase();
+  if (normalizedText === 'hola') {
+    await resetSession(chatId);
+    const ctx = { chatId, clientPhone, pushName, messageType, text, message: msg, rawMessage, sender };
+    await dispatch(ctx);
+    return;
+  }
 
   const cleanAdminPhone = config.admin.phone.replace(/\D/g, '');
   const isAdmin = (chatId === config.admin.jid) || (clientPhone && clientPhone.includes(cleanAdminPhone));

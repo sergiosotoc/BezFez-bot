@@ -6,7 +6,28 @@ import {
   mergeFormData,
   getMissingFields,
   getMissingFieldMessage,
+  parseFormatoLibre
 } from '../../parsers/formParser.js';
+
+function extractAddressData(text) {
+  if (!text || text.length < 30) return {};
+  
+  const libreData = parseFormatoLibre(text);
+  const addressFields = [
+    'nombre_origen', 'calle_origen', 'colonia_origen', 'ciudad_origen', 'cp_origen', 'cel_origen',
+    'nombre_destino', 'calle_destino', 'colonia_destino', 'ciudad_destino', 'cp_destino', 'cel_destino',
+    'contenido'
+  ];
+  
+  const extracted = {};
+  for (const field of addressFields) {
+    if (libreData[field]) {
+      extracted[field] = libreData[field];
+    }
+  }
+  
+  return extracted;
+}
 
 function rescueDimensions(data) {
   if (data.largo && data.ancho && data.alto)
@@ -36,6 +57,7 @@ export async function handleParsingData(ctx) {
 
   const prevData = session?.form_data || {};
 
+  // Intentar parsear input básico
   const parsed = parseFlexibleInput(text);
   const detection = detectUserInput(text);
 
@@ -52,10 +74,21 @@ export async function handleParsingData(ctx) {
     merged = mergeFormData(merged, detection.data);
   }
 
+  // 🆕 Extraer datos de dirección si el mensaje es largo
+  if (text.length > 50) {
+    const addressData = extractAddressData(text);
+    if (Object.keys(addressData).length > 0) {
+      merged = mergeFormData(merged, addressData);
+    }
+  }
+
+  // Rescatar dimensiones si vienen como string
   const cleanMerged = rescueDimensions(merged);
 
+  // Actualizar sesión con datos combinados
   await updateSession(chatId, { form_data: cleanMerged });
 
+  // Validar campos faltantes
   const missing = getMissingFields(cleanMerged);
 
   if (missing.length === 0) {
