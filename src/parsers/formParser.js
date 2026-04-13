@@ -174,7 +174,7 @@ function parsePersonBlock(block) {
 
     // 1. NOMBRE
     const nombreMatch = line.match(/^nombre\s*:?\s*(.+)/i) ||
-                        line.match(/^nombre\s+(?:completo|origen|destino)?\s*:?\s*(.+)/i);
+      line.match(/^nombre\s+(?:completo|origen|destino)?\s*:?\s*(.+)/i);
     if (nombreMatch) {
       data.nombre = nombreMatch[1].trim();
       continue;
@@ -203,10 +203,10 @@ function parsePersonBlock(block) {
 
     // 4. CP
     const cpMatch = line.match(/\bc\.?\s*p\.?\s*[:\s]?\s*(\d{5})\b/i) ||
-                    line.match(/\bcp\s*[:\s]?\s*(\d{5})\b/i) ||
-                    line.match(/\bc\.?\s*p\.?\s+(\d{5})\b/i) ||
-                    line.match(/codigo\s*postal\s*:?\s*(\d{5})/i) ||
-                    (/^\d{5}$/.test(line.trim()) ? [null, line.trim()] : null);
+      line.match(/\bcp\s*[:\s]?\s*(\d{5})\b/i) ||
+      line.match(/\bc\.?\s*p\.?\s+(\d{5})\b/i) ||
+      line.match(/codigo\s*postal\s*:?\s*(\d{5})/i) ||
+      (/^\d{5}$/.test(line.trim()) ? [null, line.trim()] : null);
 
     if (cpMatch) {
       data.cp = cpMatch[1];
@@ -281,12 +281,49 @@ function parsePersonBlock(block) {
 
   // CIUDAD
   if (!data.ciudad && posQueue.length > 0) {
-    const ciudadIdx = posQueue.findIndex(l =>
-      l.includes(',') ||
-      /puebla|morelia|cdmx|guadalajara|monterrey|mexico|méxico|durango|nuevo\s+leon|nuevo\s+león/i.test(l.toLowerCase())
-    );
+
+    const ciudadIdx = posQueue.findIndex(line => {
+      const l = line.trim();
+      const lower = l.toLowerCase();
+
+      // ❌ descartar ruido
+      if (!l) return false;
+      if (/\d{5}/.test(l)) return false; // CP
+      if (/^\d+$/.test(l)) return false; // números
+      if (/\d{10}/.test(l.replace(/\D/g, ''))) return false; // teléfono
+
+      if (/calle|av|avenida|blvd|boulevard|num|#|lote|mz|manzana/i.test(lower)) return false;
+      if (/col|colonia/i.test(lower)) return false;
+      if (/tel|cel|telefono/i.test(lower)) return false;
+
+      // 🔥 ESTA ES LA CLAVE:
+      // línea "limpia" de texto → candidata a ciudad
+      const words = l.split(' ').filter(Boolean);
+
+      return words.length >= 1 && words.length <= 5;
+    });
+
     if (ciudadIdx !== -1) {
-      data.ciudad = posQueue.splice(ciudadIdx, 1)[0];
+      let ciudadRaw = posQueue.splice(ciudadIdx, 1)[0].trim();
+
+      // 🔥 NORMALIZAR
+      ciudadRaw = ciudadRaw
+        .replace(/\bcd\.?\b/gi, 'Ciudad')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      // 🔥 SI NO HAY COMA → inferir estado
+      if (!ciudadRaw.includes(',')) {
+        const parts = ciudadRaw.split(' ');
+
+        if (parts.length >= 2) {
+          const estado = parts.pop();
+          const ciudad = parts.join(' ');
+          ciudadRaw = `${ciudad}, ${estado}`;
+        }
+      }
+
+      data.ciudad = ciudadRaw;
     }
   }
 
@@ -301,18 +338,6 @@ function parsePersonBlock(block) {
     }
   }
 
-  // Fallback genérico: si aún queda una línea de texto válida, tomarla como colonia
-  if (!data.colonia && posQueue.length > 0) {
-    const genericColIdx = posQueue.findIndex(l =>
-      !/\d/.test(l) &&
-      !l.includes(',') &&
-      l.trim().length >= 3
-    );
-    if (genericColIdx !== -1) {
-      data.colonia = posQueue.splice(genericColIdx, 1)[0];
-    }
-  }
-
   // Limpieza ciudad/estado repetidos
   if (data.ciudad) {
     const parts = data.ciudad.split(',').map(p => p.trim());
@@ -320,7 +345,7 @@ function parsePersonBlock(block) {
       const city = parts[0];
       const state = parts[1];
       if (city.toLowerCase() === state.toLowerCase() ||
-          state.toLowerCase().startsWith(city.toLowerCase().substring(0, 3))) {
+        state.toLowerCase().startsWith(city.toLowerCase().substring(0, 3))) {
         data.ciudad = `${city}, ${state}`;
       }
     }
@@ -434,19 +459,19 @@ export function parseFormatoLibre(text) {
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     const lastLine = lines[lines.length - 1];
     if (lastLine &&
-        lastLine.length >= 3 &&
-        lastLine.length <= 40 &&
-        !/\d/.test(lastLine) &&
-        !/[x×]/.test(lastLine)) {
+      lastLine.length >= 3 &&
+      lastLine.length <= 40 &&
+      !/\d/.test(lastLine) &&
+      !/[x×]/.test(lastLine)) {
       posibleContenido = lastLine;
     }
   }
 
   if (posibleContenido) {
     const palabrasInvalidas = [
-      'destinatario','remitente','paquete','producto','articulo','artículos',
-      'medidas','peso','contenido','origen','destino','cliente',
-      'envio','envió','guia','guía','factura','cotizacion','cotización'
+      'destinatario', 'remitente', 'paquete', 'producto', 'articulo', 'artículos',
+      'medidas', 'peso', 'contenido', 'origen', 'destino', 'cliente',
+      'envio', 'envió', 'guia', 'guía', 'factura', 'cotizacion', 'cotización'
     ];
     const valido = (
       posibleContenido.length >= 3 &&

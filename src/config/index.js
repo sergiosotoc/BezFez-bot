@@ -21,12 +21,6 @@ export const config = {
     phone: required('ADMIN_PHONE'),
     jid: `${required('ADMIN_PHONE')}@s.whatsapp.net`,
   },
-  bank: {
-    name:    process.env.BANK_NAME    || 'Tu Banco',
-    account: process.env.BANK_ACCOUNT || '123456789',
-    clabe:   process.env.BANK_CLABE   || '012345678901234567',
-    holder:  process.env.BANK_HOLDER  || 'Tu Nombre',
-  },
   iva:               parseFloat(process.env.IVA_RATE || '0.16'),
   oversizeThreshold: 100,
   oversizeCharge:    175,

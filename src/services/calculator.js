@@ -1,5 +1,5 @@
 import { config } from '../config/index.js';
-import { getPreciosPorPeso } from './sheets.js';
+import { getPreciosPorPeso } from './rates.js';
 
 export function calcBillableWeight({ largo, ancho, alto, peso }) {
   const pesoVolumetrico = (largo * ancho * alto) / 5000;
@@ -45,7 +45,7 @@ export async function buildQuotes({ pesoFacturable, cargoExtra }, invoice) {
     id,
     label,
     basePrice,
-    total: basePrice + cargoExtra,
+    total: (basePrice || 0) + cargoExtra
   }));
 }
 

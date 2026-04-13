@@ -4,6 +4,8 @@ import { dispatch } from '../fsm/machine.js';
 import { config } from '../config/index.js';
 import { logger } from '../config/logger.js';
 import { extendPause, endPause } from '../services/deadman.js';
+import { processRatesExcel } from '../services/ratesUploader.js';
+import { downloadMediaMessage } from '@whiskeysockets/baileys';
 
 const rateLimitMap = new Map();
 export const lidToPhoneMap = new Map();
@@ -116,6 +118,39 @@ export async function route(rawMessage, sender, sock) {
 
   const cleanAdminPhone = config.admin.phone.replace(/\D/g, '');
   const isAdmin = (chatId === config.admin.jid) || (clientPhone && clientPhone.includes(cleanAdminPhone));
+
+  if (isAdmin && messageType === 'documentMessage') {
+    const doc = rawMessage.message.documentMessage;
+
+    logger.info({ fileName: doc.fileName }, 'Excel recibido');
+
+    if (!doc.fileName?.endsWith('.xlsx')) {
+      await sender.sendText(chatId, '⚠️ Envía un archivo Excel válido (.xlsx)');
+      return;
+    }
+
+    try {
+      const buffer = await downloadMediaMessage(
+        rawMessage,
+        'buffer',
+        {},
+        {
+          logger,
+          reuploadRequest: sock.updateMediaMessage
+        }
+      );
+
+      const count = await processRatesExcel(buffer);
+
+      await sender.sendText(chatId, `✅ Tarifas actualizadas (${count} filas)`);
+
+    } catch (err) {
+      logger.error({ err: err.message }, 'Error procesando Excel');
+      await sender.sendText(chatId, `❌ Error: ${err.message}`);
+    }
+
+    return;
+  }
 
   if (isAdmin) {
     const wasCommand = await handleAdminMessage({ chatId, text, sender, rawMessage });
