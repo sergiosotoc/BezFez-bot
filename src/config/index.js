@@ -1,5 +1,6 @@
 /* src/config/idex.js */
-import 'dotenv/config';
+import dotenv from 'dotenv';
+dotenv.config();
 
 function required(key) {
   const val = process.env[key];
@@ -12,10 +13,8 @@ export const config = {
     url: required('SUPABASE_URL'),
     serviceRoleKey: required('SUPABASE_SERVICE_ROLE_KEY'),
   },
-  google: {
-    sheetId:     required('SHEET_ID'),
-    clientEmail: required('GOOGLE_CLIENT_EMAIL'),
-    privateKey:  required('GOOGLE_PRIVATE_KEY'),
+  opencage: {
+    apiKey: process.env.OPENCAGE_API_KEY,
   },
   admin: {
     phone: required('ADMIN_PHONE'),

@@ -1,33 +1,37 @@
+/* src/services/calculator.js */
 import { config } from '../config/index.js';
-import { getPreciosPorPeso } from './rates.js';
+import { getPreciosPorPeso, getTarifas } from './rates.js';
 
-export function calcBillableWeight({ largo, ancho, alto, peso }) {
+export async function calcBillableWeight({ largo, ancho, alto, peso }) {
   const pesoVolumetrico = (largo * ancho * alto) / 5000;
   const pesoFacturable = Math.max(peso, pesoVolumetrico);
+
+  const tarifas = await getTarifas();
+
+  const fila = tarifas.find(t => t.peso >= pesoFacturable)
+    ?? tarifas[tarifas.length - 1];
+
+  const pesoACobrar = fila.peso;
+
   const oversize = Math.max(largo, ancho, alto) > config.oversizeThreshold;
   const cargoExtra = oversize ? config.oversizeCharge : 0;
 
   return {
     pesoFacturable: Math.ceil(pesoFacturable * 100) / 100,
+    pesoACobrar,
     oversize,
     cargoExtra,
   };
 }
 
-export function applyIVA(base, requiereFactura) {
-  if (!requiereFactura) return base;
-  return Math.ceil(base * (1 + config.iva) * 100) / 100;
-}
-
-export async function buildQuotes({ pesoFacturable, cargoExtra }, invoice) {
-  const precios = await getPreciosPorPeso(pesoFacturable, invoice);
+export async function buildQuotes({ pesoACobrar, cargoExtra }, invoice) {
+  const precios = await getPreciosPorPeso(pesoACobrar, invoice);
 
   const carriers = [
     {
       id: 1,
       label: 'Estafeta Express',
-      basePrice:
-        precios.estafeta_express
+      basePrice: precios.estafeta_express
     },
     {
       id: 2,
@@ -41,23 +45,27 @@ export async function buildQuotes({ pesoFacturable, cargoExtra }, invoice) {
     },
   ];
 
-  return carriers.map(({ id, label, basePrice }) => ({
-    id,
-    label,
-    basePrice,
-    total: (basePrice || 0) + cargoExtra
-  }));
+  return carriers.map(({ id, label, basePrice }) => {
+    const total = (basePrice || 0) + cargoExtra;
+
+    return {
+      id,
+      label,
+      basePrice,
+      total: Math.ceil(total)
+    };
+  });
 }
 
 export function formatQuoteMessage({
-  pesoFacturable,
+  pesoACobrar,
   oversize,
   invoice,
   quotes
 }) {
   const lines = [
     '*COTIZACIÓN*',
-    `Peso facturable: ${pesoFacturable}kg`,
+    `Peso a facturable: ${pesoACobrar}kg`,
     `Factura: ${invoice ? 'Sí' : 'No'}`,
   ];
 

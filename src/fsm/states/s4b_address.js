@@ -1,9 +1,25 @@
 /* src/fsm/states/s4b_address.js */
 import { transitionState, updateSession } from '../../services/supabase.js';
 import { mergeFormData, normalizePhone } from '../../parsers/formParser.js';
+import { getLocationData } from '../../services/geocode.js';
 import { formatAdminSummary } from '../../services/calculator.js';
 import { startPause } from '../../services/deadman.js';
 import { config } from '../../config/index.js';
+
+// 🔥 A. CACHE GLOBAL
+const geoCache = new Map();
+
+function isSuspiciousCity(value) {
+  if (!value) return true;
+
+  const v = value.toLowerCase().trim();
+
+  return (
+    v.length < 4 ||
+    !v.includes(',') ||
+    ['centro', 'ejidal', 'industrial', 'zona', 'colonia'].includes(v)
+  );
+}
 
 const REQUIRED_FIELDS = [
   'nombre_origen',
@@ -80,6 +96,43 @@ function getMissingFields(formData) {
   return missing;
 }
 
+async function fixLocationConsistency(merged) {
+
+  // 🔵 DESTINO
+  if (merged.colonia_destino && isSuspiciousCity(merged.ciudad_destino)) {
+
+    const query = [
+      merged.colonia_destino,
+      merged.cp_destino,
+      merged.calle_destino
+    ].filter(Boolean).join(', ');
+
+    const loc = await resolveLocationSmart(query);
+
+    if (loc?.ciudad && loc?.estado) {
+      merged.ciudad_destino = `${loc.ciudad}, ${loc.estado}`;
+    }
+  }
+
+  // 🟢 ORIGEN
+  if (merged.colonia_origen && isSuspiciousCity(merged.ciudad_origen)) {
+
+    const query = [
+      merged.colonia_origen,
+      merged.cp_origen,
+      merged.calle_origen
+    ].filter(Boolean).join(', ');
+
+    const loc = await resolveLocationSmart(query);
+
+    if (loc?.ciudad && loc?.estado) {
+      merged.ciudad_origen = `${loc.ciudad}, ${loc.estado}`;
+    }
+  }
+
+  return merged;
+}
+
 const SINGLE_FIELD_PROMPT = {
   nombre_origen: '👤 ¿Cuál es el *nombre del remitente*?',
   calle_origen: '📍 ¿Cuál es la *calle y número de origen*?',
@@ -98,6 +151,25 @@ const SINGLE_FIELD_PROMPT = {
   contenido: '📦 ¿Qué *contenido* tiene el paquete? (ej: ropa, electrónicos, documentos, etc.)',
 };
 
+// 🔥 B. FUNCIÓN INTELIGENTE DE GEOLOCALIZACIÓN
+async function resolveLocationSmart(query) {
+  if (!query) return null;
+
+  const key = query.toLowerCase().trim();
+
+  if (geoCache.has(key)) {
+    return geoCache.get(key);
+  }
+
+  const result = await getLocationData(query);
+
+  if (result) {
+    geoCache.set(key, result);
+  }
+
+  return result;
+}
+
 async function assignRequestedFieldValue({ chatId, sender, fieldToFill, value, merged }) {
   if (!fieldToFill) return false;
 
@@ -106,7 +178,7 @@ async function assignRequestedFieldValue({ chatId, sender, fieldToFill, value, m
     const palabrasProhibidas = ['destinatario', 'remitente', 'paquete', 'producto'];
 
     if (palabrasProhibidas.includes(contenidoLower) || value.length < 3) {
-      await sender.sendText(chatId, `âš ï¸ Por favor, especifica un *contenido vÃ¡lido* para el paquete (ej: ropa, libros, electrÃ³nicos, documentos, etc.)\n\n${SINGLE_FIELD_PROMPT.contenido}`);
+      await sender.sendText(chatId, `⚠️ Por favor, especifica un *contenido válido* para el paquete (ej: ropa, libros, electrónicos, documentos, etc.)\n\n${SINGLE_FIELD_PROMPT.contenido}`);
       return false;
     }
 
@@ -117,7 +189,7 @@ async function assignRequestedFieldValue({ chatId, sender, fieldToFill, value, m
   if (fieldToFill === 'cel_origen' || fieldToFill === 'cel_destino') {
     const cleaned = normalizePhone(value);
     if (!cleaned) {
-      await sender.sendText(chatId, `âš ï¸ TelÃ©fono invÃ¡lido. Debe tener 10 dÃ­gitos (ej: 5512345678 o 55 1234 5678)\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
+      await sender.sendText(chatId, `⚠️ Teléfono inválido. Debe tener 10 dígitos (ej: 5512345678 o 55 1234 5678)\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
       return false;
     }
 
@@ -128,7 +200,7 @@ async function assignRequestedFieldValue({ chatId, sender, fieldToFill, value, m
   if (fieldToFill === 'cp_origen' || fieldToFill === 'cp_destino') {
     const cp = value.replace(/\D/g, '');
     if (cp.length !== 5) {
-      await sender.sendText(chatId, `âš ï¸ CP invÃ¡lido. Debe ser 5 dÃ­gitos (ej: 44620)\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
+      await sender.sendText(chatId, `⚠️ CP inválido. Debe ser 5 dígitos (ej: 44620)\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
       return false;
     }
 
@@ -137,7 +209,7 @@ async function assignRequestedFieldValue({ chatId, sender, fieldToFill, value, m
   }
 
   if (value.length < 2) {
-    await sender.sendText(chatId, `âš ï¸ El campo debe tener al menos 2 caracteres.\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
+    await sender.sendText(chatId, `⚠️ El campo debe tener al menos 2 caracteres.\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
     return false;
   }
 
@@ -187,9 +259,50 @@ export async function handleAwaitingAddress(ctx) {
   const { chatId, text, session, sender } = ctx;
   if (!text) return;
 
-  const { form_data } = session;
+  let { form_data } = session;
 
-  // Asegurar que form_data tenga las medidas y peso iniciales
+  // 🔥 CONFIRMACIÓN GEO
+  const { pending_location } = session;
+
+  if (pending_location) {
+    const answer = text.trim();
+
+    if (answer === '1' || /si|sí/i.test(answer)) {
+      const field = pending_location.type === 'destino'
+        ? 'ciudad_destino'
+        : 'ciudad_origen';
+
+      const updated = {
+        ...form_data,
+        [field]: pending_location.value
+      };
+
+      await updateSession(chatId, {
+        form_data: updated,
+        pending_location: null
+      });
+
+      await sender.sendText(chatId, 'Perfecto 👍');
+
+      return handleAwaitingAddress({
+        ...ctx,
+        session: { ...session, form_data: updated, pending_location: null }
+      });
+    }
+
+    if (answer === '2') {
+      await updateSession(chatId, { pending_location: null });
+
+      await sender.sendText(chatId,
+        'Por favor escribe la ciudad y estado manualmente (ej: Guadalajara, Jal)'
+      );
+      return;
+    }
+
+    return;
+  }
+
+  // mantener medidas/peso
   if (!form_data.medidas && session.form_data?.medidas) {
     form_data.medidas = session.form_data.medidas;
     form_data.largo = session.form_data.largo;
@@ -200,7 +313,6 @@ export async function handleAwaitingAddress(ctx) {
 
   let merged = { ...form_data };
   const missingBefore = getMissingFields(merged);
-  const fieldToFill = missingBefore[0];
   const value = text.trim();
 
   const lineCount = text.split('\n').filter(l => l.trim()).length;
@@ -210,7 +322,7 @@ export async function handleAwaitingAddress(ctx) {
     const { parseFormatoLibre } = await import('../../parsers/formParser.js');
     const libreData = parseFormatoLibre(text);
 
-    // Limpiar datos de contenido incorrectos
+    // limpiar contenido basura
     if (libreData.contenido) {
       const contenidoLower = libreData.contenido.toLowerCase().trim();
       const palabrasProhibidas = ['destinatario', 'remitente', 'paquete', 'producto'];
@@ -220,64 +332,142 @@ export async function handleAwaitingAddress(ctx) {
       }
     }
 
-    // evitar sobrescribir datos buenos con basura
-    Object.keys(libreData).forEach(key => {
-      if (merged[key]) {
-        if (key.startsWith('cel_') && /^\d{10}$/.test(merged[key])) {
-          delete libreData[key];
-        }
+    // 🔥 GEO DESTINO (ANTES DEL MERGE)
+    if (!merged.ciudad_destino && libreData.colonia_destino) {
+      const query = [
+        libreData.colonia_destino,
+        libreData.cp_destino,
+        libreData.calle_destino
+      ].filter(Boolean).join(', ');
+
+      const loc = await resolveLocationSmart(query);
+
+      if (loc?.ciudad && loc?.estado) {
+        await updateSession(chatId, {
+          pending_location: {
+            type: 'destino',
+            value: `${loc.ciudad}, ${loc.estado}`
+          }
+        });
+
+        await sender.sendText(chatId,
+          `Detecté para DESTINO:
+
+📍 ${loc.ciudad}, ${loc.estado}
+
+¿Es correcto?
+1️⃣ Sí
+2️⃣ No`
+        );
+
+        return;
       }
+    }
+
+    // 🔥 GEO ORIGEN (ANTES DEL MERGE)
+    if (!merged.ciudad_origen && libreData.colonia_origen) {
+      const query = [
+        libreData.colonia_origen,
+        libreData.cp_origen,
+        libreData.calle_origen
+      ].filter(Boolean).join(', ');
+
+      const loc = await resolveLocationSmart(query);
+
+      if (loc?.ciudad && loc?.estado) {
+        await updateSession(chatId, {
+          pending_location: {
+            type: 'origen',
+            value: `${loc.ciudad}, ${loc.estado}`
+          }
+        });
+
+        await sender.sendText(chatId,
+          `Detecté para ORIGEN:
+
+📍 ${loc.ciudad}, ${loc.estado}
+
+¿Es correcto?
+1️⃣ Sí
+2️⃣ No`
+        );
+
+        return;
+      }
+    }
+
+    // 🔥 MERGE PROTEGIDO
+    Object.keys(libreData).forEach(key => {
+      if (merged[key]) return;
+
+      if (key.includes('ciudad') && libreData[key]?.length < 4) return;
+      if (key.includes('colonia') && libreData[key]?.length < 3) return;
+
+      merged[key] = libreData[key];
     });
 
-    merged = mergeFormData(merged, libreData);
-
-    if (fieldToFill && !merged[fieldToFill]) {
-      const assigned = await assignRequestedFieldValue({ chatId, sender, fieldToFill, value, merged });
-      if (!assigned) return;
+    // 🔥 PROTECCIÓN CRUZADA
+    if (merged.ciudad_origen && merged.colonia_origen === merged.ciudad_origen) {
+      delete merged.colonia_origen;
     }
+
+    if (merged.ciudad_destino && merged.colonia_destino === merged.ciudad_destino) {
+      delete merged.colonia_destino;
+    }
+
+    // 🔥 VALIDACIÓN FINAL DESTINO
+    if (merged.cp_destino && merged.colonia_destino && !merged.ciudad_destino) {
+      const loc = await resolveLocationSmart(merged.colonia_destino);
+
+      if (loc?.ciudad && loc?.estado) {
+        merged.ciudad_destino = `${loc.ciudad}, ${loc.estado}`;
+      }
+    }
+
   } else {
-    const assigned = await assignRequestedFieldValue({ chatId, sender, fieldToFill, value, merged });
-    if (!assigned) return;
-    const missingBeforeLegacy = getMissingFields(merged);
-    const fieldToFillLegacy = missingBeforeLegacy[0];
-    const valueLegacy = text.trim();
+    const fieldToFill = missingBefore[0];
 
-    if (fieldToFillLegacy === 'contenido') {
-      // Validación especial para contenido
-      const contenidoLower = valueLegacy.toLowerCase();
-      const palabrasProhibidas = ['destinatario', 'remitente', 'paquete', 'producto'];
+    // 🔥 asignación controlada
+    if (fieldToFill?.includes('origen')) {
+      merged[fieldToFill] = value;
+    }
+    else if (fieldToFill?.includes('destino')) {
+      merged[fieldToFill] = value;
+    }
+  }
 
-      if (palabrasProhibidas.includes(contenidoLower) || valueLegacy.length < 3) {
-        await sender.sendText(chatId, `⚠️ Por favor, especifica un *contenido válido* para el paquete (ej: ropa, libros, electrónicos, documentos, etc.)\n\n${SINGLE_FIELD_PROMPT.contenido}`);
-        return;
-      }
-      merged[fieldToFillLegacy] = valueLegacy;
-    }
-    else if (fieldToFillLegacy === 'cel_origen' || fieldToFillLegacy === 'cel_destino') {
-      const cleaned = normalizePhone(valueLegacy);
-      if (cleaned) {
-        merged[fieldToFillLegacy] = cleaned;
-      } else {
-        await sender.sendText(chatId, `⚠️ Teléfono inválido. Debe tener 10 dígitos (ej: 5512345678 o 55 1234 5678)\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
-        return;
-      }
-    }
-    else if (fieldToFillLegacy === 'cp_origen' || fieldToFillLegacy === 'cp_destino') {
-      const cp = valueLegacy.replace(/\D/g, '');
-      if (cp.length === 5) {
-        merged[fieldToFillLegacy] = cp;
-      } else {
-        await sender.sendText(chatId, `⚠️ CP inválido. Debe ser 5 dígitos (ej: 44620)\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
-        return;
-      }
-    }
-    else {
-      if (valueLegacy.length >= 2) {
-        merged[fieldToFillLegacy] = valueLegacy;
-      } else {
-        await sender.sendText(chatId, `⚠️ El campo debe tener al menos 2 caracteres.\n\n${SINGLE_FIELD_PROMPT[fieldToFill]}`);
-        return;
-      }
+  merged = await fixLocationConsistency(merged);
+
+  // 🔥 CONFIRMACIÓN SI LA CIUDAD SE CORRIGIÓ AUTOMÁTICAMENTE
+  if (merged.colonia_destino && isSuspiciousCity(merged.ciudad_destino)) {
+
+    const query = [
+      merged.colonia_destino,
+      merged.cp_destino
+    ].filter(Boolean).join(', ');
+
+    const loc = await resolveLocationSmart(query);
+
+    if (loc?.ciudad && loc?.estado) {
+
+      await updateSession(chatId, {
+        pending_location: {
+          type: 'destino',
+          value: `${loc.ciudad}, ${loc.estado}`
+        }
+      });
+
+      await sender.sendText(chatId,
+        `Detecté para DESTINO:
+
+📍 ${loc.ciudad}, ${loc.estado}
+
+¿Es correcto?
+1️⃣ Sí
+2️⃣ No`
+      );
+
+      return;
     }
   }
 
@@ -294,6 +484,7 @@ export async function handleAwaitingAddress(ctx) {
 
   if (selected_carrier) {
     const folio = `PED-${Date.now()}`;
+
     const adminSummary = formatAdminSummary({
       folio,
       carrier: selected_carrier,
@@ -302,15 +493,21 @@ export async function handleAwaitingAddress(ctx) {
       clientPhone: ctx.clientPhone,
       pushName: ctx.pushName,
       formData: merged,
-      calc: { pesoFacturable: billable_weight, oversize: (oversize_charge || 0) > 0 },
+      calc: {
+        pesoFacturable: billable_weight,
+        oversize: (oversize_charge || 0) > 0
+      },
       invoice: invoice_required,
     });
 
     await sender.sendText(config.admin.jid, adminSummary);
 
-    await sender.sendText(
-      chatId,
-      `✅ *Tu solicitud fue enviada correctamente*\n\nTu guía será generada por un asesor.\n\n📲 En breve recibirás atención personalizada.\nSi hay algún ajuste en el precio, se te notificará antes de generar la guía.`
+    await sender.sendText(chatId,
+      `✅ *Tu solicitud fue enviada correctamente*
+
+Tu guía será generada por un asesor.
+
+📲 En breve recibirás atención personalizada.`
     );
 
     await transitionState(chatId, 'AWAITING_ADDRESS', 'PAUSED', { form_data: merged });
@@ -319,13 +516,15 @@ export async function handleAwaitingAddress(ctx) {
   }
 
   await transitionState(
-    chatId, 
-    'AWAITING_ADDRESS', 
-    'AWAITING_SELECTION', 
+    chatId,
+    'AWAITING_ADDRESS',
+    'AWAITING_SELECTION',
     { form_data: merged });
+
   await sender.sendText(
-    chatId, 
-    'Perfecto 👍 Ya tengo todos los datos.\n\nAhora confirma tu paquetería escribiendo el número o nombre de la opción que elegiste.');
+    chatId,
+    'Perfecto 👍 Ya tengo todos los datos.\n\nAhora confirma tu paquetería escribiendo el número o nombre de la opción que elegiste.'
+  );
 }
 
 export function needsAddressCollection(formData) {

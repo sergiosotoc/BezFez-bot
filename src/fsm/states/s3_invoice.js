@@ -139,7 +139,7 @@ export async function handleAwaitingInvoice(ctx) {
   }
 
   try {
-    const calc = calcBillableWeight({
+    const calc = await calcBillableWeight({
       largo: validatedData.largo,
       ancho: validatedData.ancho,
       alto: validatedData.alto,
@@ -154,7 +154,7 @@ export async function handleAwaitingInvoice(ctx) {
       'AWAITING_SELECTION',
       {
         invoice_required: invoice,
-        billable_weight: calc.pesoFacturable,
+        billable_weight: calc.pesoACobrar,
         oversize_charge: calc.cargoExtra,
         form_data: {
           ...validatedData,
@@ -170,7 +170,7 @@ export async function handleAwaitingInvoice(ctx) {
     if (!success) return;
 
     const quoteMsg = formatQuoteMessage({
-      pesoFacturable: calc.pesoFacturable,
+      pesoACobrar: calc.pesoACobrar,
       oversize: calc.oversize,
       invoice,
       quotes,

@@ -30,10 +30,10 @@ export async function getTarifas() {
   return data;
 }
 
-export async function getPreciosPorPeso(peso, conIVA) {
+export async function getPreciosPorPeso(pesoACobrar, conIVA) {
   const tarifas = await getTarifas();
 
-  const fila = tarifas.find(t => t.peso >= peso) 
+  const fila = tarifas.find(t => t.peso === pesoACobrar)
     ?? tarifas[tarifas.length - 1];
 
   return {

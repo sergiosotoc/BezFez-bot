@@ -286,21 +286,30 @@ function parsePersonBlock(block) {
       const l = line.trim();
       const lower = l.toLowerCase();
 
-      // ❌ descartar ruido
       if (!l) return false;
-      if (/\d{5}/.test(l)) return false; // CP
-      if (/^\d+$/.test(l)) return false; // números
-      if (/\d{10}/.test(l.replace(/\D/g, ''))) return false; // teléfono
 
+      // ❌ descartar CP
+      if (/\d{5}/.test(l)) return false;
+
+      // ❌ descartar solo números
+      if (/^\d+$/.test(l)) return false;
+
+      // ❌ descartar teléfonos
+      if (/\d{10}/.test(l.replace(/\D/g, ''))) return false;
+
+      // ❌ descartar direcciones
       if (/calle|av|avenida|blvd|boulevard|num|#|lote|mz|manzana/i.test(lower)) return false;
-      if (/col|colonia/i.test(lower)) return false;
+
+      // ❌ descartar colonias típicas
+      if (/col|colonia|ejidal|centro|industrial|residencial|fracc/i.test(lower)) return false;
+
+      // ❌ descartar etiquetas
       if (/tel|cel|telefono/i.test(lower)) return false;
 
-      // 🔥 ESTA ES LA CLAVE:
-      // línea "limpia" de texto → candidata a ciudad
       const words = l.split(' ').filter(Boolean);
 
-      return words.length >= 1 && words.length <= 5;
+      // ✅ ciudad normalmente tiene 2+ palabras o formato con coma
+      return words.length >= 2 || l.includes(',');
     });
 
     if (ciudadIdx !== -1) {
@@ -745,10 +754,17 @@ const CARRIER_KEYWORDS = [
 
 export function parseCarrierSelection(text) {
   const t = text.trim();
-  const num = parseInt(t);
+  const num = Number(t);
+  const numMatch = t.match(/\b([1-3])\b/);
 
-  if (num >= 1 && num <= 3)
+  if (numMatch) {
+    const num = Number(numMatch[1]);
     return { id: num, label: CARRIER_MAP[num] };
+  }
+
+  if (!isNaN(num) && num >= 1 && num <= 3) {
+    return { id: Number(num), label: CARRIER_MAP[num] };
+  }
 
   if (/estafeta|esta/i.test(t) && !/express|exp|terrestre|terr/i.test(t)) {
     return { ambiguous: true };

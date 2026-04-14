@@ -54,26 +54,44 @@ export async function handleAwaitingSelection(ctx) {
   // ─────────────────────────────────────────
 
   if (pending_selection === 'estafeta') {
-    if (/express|exp|rapido|rápido/i.test(text)) {
+
+    const num = Number(text.trim());
+
+    if (num === 1) {
+      selection = { id: 1, label: 'Estafeta Express' };
+    } else if (num === 2) {
+      selection = { id: 2, label: 'Estafeta Terrestre' };
+    }
+
+    else if (/express|exp|rapido|rápido/i.test(text)) {
       selection = { id: 1, label: 'Estafeta Express' };
     } else if (/terrestre|terr/i.test(text)) {
       selection = { id: 2, label: 'Estafeta Terrestre' };
     } else {
       await sender.sendText(
         chatId,
-        'Perfecto 👍\n\n¿Deseas *Estafeta Express* 🚀 o *Estafeta Terrestre* 🚚?\n\nResponde: EXPRESS o TERRESTRE'
+        'Perfecto 👍\n\n¿Deseas *Estafeta Express* 🚀 o *Estafeta Terrestre* 🚚?\n\nResponde: 1 o 2\nEXPRESS o TERRESTRE'
       );
       return;
     }
   }
 
   if (pending_selection === 'terrestre') {
-    if (/estafeta|esta/i.test(text)) {
+
+    const num = Number(text.trim());
+
+    if (num === 2) {
+      selection = { id: 2, label: 'Estafeta Terrestre' };
+    } else if (num === 3) {
+      selection = { id: 3, label: 'FedEx Terrestre' };
+    }
+
+    else if (/estafeta|esta/i.test(text)) {
       selection = { id: 2, label: 'Estafeta Terrestre' };
     } else if (/fedex|fed/i.test(text)) {
       selection = { id: 3, label: 'FedEx Terrestre' };
     } else {
-      await sender.sendText(chatId, 'Responde: *ESTAFETA* 🚚 o *FEDEX* 📦');
+      await sender.sendText(chatId, 'Responde: 2 o 3\nESTAFETA o FEDEX');
       return;
     }
   }
@@ -89,7 +107,13 @@ export async function handleAwaitingSelection(ctx) {
   if (!selection) {
     const parsed = parseCarrierSelection(text);
 
-    if (parsed?.ambiguous === 'terrestre') {
+    // 🔥 PRIORIDAD 1: selección directa (número o match exacto)
+    if (parsed?.id) {
+      selection = parsed;
+    }
+
+    // 🔥 PRIORIDAD 2: ambigüedad
+    else if (parsed?.ambiguous === 'terrestre') {
       await updateSession(chatId, { pending_selection: 'terrestre' });
       await sender.sendText(
         chatId,
@@ -98,7 +122,7 @@ export async function handleAwaitingSelection(ctx) {
       return;
     }
 
-    if (parsed?.ambiguous === true) {
+    else if (parsed?.ambiguous === true) {
       await updateSession(chatId, { pending_selection: 'estafeta' });
       await sender.sendText(
         chatId,
@@ -107,6 +131,7 @@ export async function handleAwaitingSelection(ctx) {
       return;
     }
 
+    // 🔥 fallback
     if (!parsed) {
       await sender.sendText(chatId, UNKNOWN_SELECTION_MSG(quotes));
       return;
@@ -115,7 +140,7 @@ export async function handleAwaitingSelection(ctx) {
     selection = parsed;
   }
 
-  const chosen = quotes.find(q => q.id === selection.id);
+  const chosen = quotes.find(q => Number(q.id) === Number(selection.id));
 
   if (!chosen) {
     await sender.sendText(chatId, UNKNOWN_SELECTION_MSG(quotes));
