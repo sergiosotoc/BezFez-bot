@@ -190,8 +190,15 @@ function parsePersonBlock(block) {
   for (const line of lines) {
     const n = norm(line);
     const originalLine = line.trim();
-    const takeTrailingValue = (matchedValue) =>
-      originalLine.slice(originalLine.length - matchedValue.length).trim();
+    const takeTrailingValue = (matchedValue) => {
+      if (typeof matchedValue !== 'string') return '';
+
+      const value = originalLine
+        .slice(originalLine.length - matchedValue.length)
+        .trim();
+
+      return value || '';
+    };
 
     // Saltar encabezados de bloque (incluye variantes abreviadas)
     if (/^(remitente|destinatario|receptor|envia|datos\s+de|origen|orígen|orig|destino|dest)\b/i.test(n)) {
@@ -202,9 +209,8 @@ function parsePersonBlock(block) {
     const nombreMatch = n.match(/^nombre\s+(?:completo|origen|destino)?\s*:?\s*(.+)$/i) ||
       n.match(/^(remitente|destinatario|receptor)\s*:?\s*(.+)$/i);
     if (nombreMatch) {
-      data.nombre = takeTrailingValue(nombreMatch[3] ||
-        nombreMatch[2]);
-      continue;
+      const value = nombreMatch[3] || nombreMatch[2] || '';
+      data.nombre = takeTrailingValue(value);
     }
 
     // 2. DIRECCIÓN / CALLE
