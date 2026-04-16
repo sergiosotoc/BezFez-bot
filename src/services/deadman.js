@@ -141,6 +141,7 @@ async function sendReminder(chatId, clientName) {
 
   const msg = [
     `⚠️ *RE RECORDATORIO:* El chat con *${clientName}* sigue pausado.`,
+    `ID: ${chatId}`,
     'El bot se reactivará en 10 min.',
     '¿Deseas extender la pausa 1 hora más? (Responder: *EXTENDER*)',
   ].join('\n');

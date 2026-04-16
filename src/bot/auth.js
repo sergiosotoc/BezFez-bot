@@ -77,3 +77,24 @@ export async function uploadAuthToSupabase() {
     logger.warn({ err: err.message }, 'Error subiendo auth a Supabase');
   }
 }
+
+export async function resetAuthStorage() {
+  try {
+    const { data: files } = await supabase.storage
+      .from(BUCKET)
+      .list(SESSION_KEY);
+
+    if (files?.length) {
+      await supabase.storage
+        .from(BUCKET)
+        .remove(files.map(file => `${SESSION_KEY}/${file.name}`));
+    }
+
+    await fs.rm(AUTH_DIR, { recursive: true, force: true });
+    logger.warn('Sesion de WhatsApp eliminada por comando admin');
+    return true;
+  } catch (err) {
+    logger.error({ err: err.message }, 'Error reseteando auth');
+    return false;
+  }
+}

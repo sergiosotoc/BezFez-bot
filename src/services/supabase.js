@@ -1,4 +1,5 @@
 /* src/services/supabase.js */
+
 import { createClient } from '@supabase/supabase-js';
 import { config } from '../config/index.js';
 import { logger } from '../config/logger.js';
@@ -73,6 +74,10 @@ export async function getActivePausedSessions() {
   return data || [];
 }
 
+/**
+ * Resetea la sesión de un cliente a IDLE limpiando TODOS los campos de estado,
+ * incluyendo pending_selection y pending_location que antes quedaban residuales.
+ */
 export async function resetSession(chatId) {
   const { error } = await supabase
     .from('sessions')
@@ -86,6 +91,9 @@ export async function resetSession(chatId) {
       total_amount: null,
       paused_at: null,
       pause_expires_at: null,
+      pending_selection: null,
+      pending_location: null,
+      current_field: null,
     })
     .eq('chat_id', chatId);
 

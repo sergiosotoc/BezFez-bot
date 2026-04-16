@@ -9,7 +9,7 @@ Chatbot de WhatsApp para cotizaciones de guías de envío con 3 paqueterías (Es
 | WhatsApp API | Baileys (`@whiskeysockets/baileys`) |
 | Runtime | Node.js >= 18 (ESM) |
 | Base de datos | Supabase (PostgreSQL + Storage) |
-| Tarifas | Google Sheets |
+| Tarifas | Supabase `rates` actualizable por Excel enviado por admin |
 | Logs | Pino |
 
 ---
@@ -18,7 +18,6 @@ Chatbot de WhatsApp para cotizaciones de guías de envío con 3 paqueterías (Es
 
 - Node.js >= 18
 - Cuenta de Supabase con proyecto creado
-- Google Cloud project con Sheets API habilitada
 - Número de WhatsApp dedicado para el bot
 
 ---
@@ -42,16 +41,13 @@ cp .env.example .env
 1. Crea un proyecto en [supabase.com](https://supabase.com)
 2. Ve a **SQL Editor** y ejecuta el archivo `src/db/migrations/001_initial.sql`
 3. Copia la `URL` y la `service_role` key de **Project Settings → API**
-4. En **Storage**, los buckets `comprobantes` y `auth-sessions` se crean automáticamente al arrancar el bot
+4. En **Storage**, los buckets `bot-files` y `auth-sessions` se crean automáticamente al arrancar el bot
 
-### 2. Google Sheets
+### 2. Tarifas
 
-1. Crea una hoja de cálculo con la estructura de tarifas por peso (columnas: peso, express, expressIVA, terrestre, terrestreIVA, fedex, fedexIVA)
-2. Crea una cuenta de servicio en Google Cloud Console:
-   - Ve a **IAM & Admin → Service Accounts**
-   - Crea cuenta → genera clave JSON
-   - Comparte la hoja con el email de la cuenta de servicio (rol Viewer)
-3. Copia el `client_email` y `private_key` del JSON a las variables de entorno correspondientes
+1. Ejecuta la migración para crear la tabla `rates`.
+2. Envía desde el número admin un archivo `.xlsx` al bot con columnas: peso, express, expressIVA, terrestre, terrestreIVA, fedex, fedexIVA.
+3. El bot reemplaza las tarifas de Supabase y limpia el caché.
 
 ### 3. Variables de entorno
 
@@ -59,21 +55,12 @@ cp .env.example .env
 SUPABASE_URL=https://xxxx.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJ...
 
-SHEET_ID=1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms
-GOOGLE_CLIENT_EMAIL=bot@proyecto.iam.gserviceaccount.com
-GOOGLE_PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----
-
 ADMIN_PHONE=5216181096537
-BANK_NAME=BBVA
-BANK_ACCOUNT=1234567890
-BANK_CLABE=012345678901234567
-BANK_HOLDER=Tu Nombre
 
 IVA_RATE=0.16
 LOG_LEVEL=info
+OPENCAGE_API_KEY=opcional
 ```
-
-> **Nota sobre `GOOGLE_PRIVATE_KEY`:** Pégala con los `\n` literales, sin comillas adicionales alrededor.
 
 ---
 
@@ -110,16 +97,16 @@ src/
 ├── fsm/
 │   ├── machine.js            # Dispatcher de estados FSM
 │   └── states/
-│       ├── s1_format.js      # IDLE → AWAITING_FORMAT
-│       ├── s2_parsing.js     # AWAITING_FORMAT → AWAITING_INVOICE
+│       ├── s1_format.js      # IDLE → PARSING_DATA/AWAITING_INVOICE
+│       ├── s2_parsing.js     # PARSING_DATA → AWAITING_INVOICE
 │       ├── s3_invoice.js     # AWAITING_INVOICE → AWAITING_SELECTION
 │       ├── s4_selection.js   # AWAITING_SELECTION → AWAITING_ADDRESS
-│       ├── s4b_address.js    # AWAITING_ADDRESS → AWAITING_PAYMENT
-│       ├── s5_payment.js     # AWAITING_PAYMENT → PAUSED
+│       ├── s4b_address.js    # AWAITING_ADDRESS → PAUSED
 │       └── s6_paused.js      # PAUSED (bot suspendido)
 ├── services/
 │   ├── supabase.js           # Cliente + helpers con bloqueo optimista
-│   ├── sheets.js             # Tarifas con caché 10min + fallback
+│   ├── rates.js              # Tarifas desde Supabase con caché
+│   ├── ratesUploader.js      # Carga de tarifas desde Excel
 │   ├── calculator.js         # Peso facturable, IVA, formatos de mensaje
 │   ├── storage.js            # Upload a Supabase Storage con reintentos
 │   └── deadman.js            # Temporizador de pausa + boot recovery
@@ -137,7 +124,7 @@ src/
 ```
 Cliente escribe → S0: IDLE
                      ↓ Envía datos de paquete (medidas, peso, CPs)
-                  S1: AWAITING_FORMAT / S2: PARSING_DATA
+                  S2: PARSING_DATA
                      ↓ Parser extrae datos; pide los que falten
                   S3: AWAITING_INVOICE  ← ¿Requiere factura?
                      ↓ Calcula cotización (peso facturable + cargos)
@@ -145,8 +132,6 @@ Cliente escribe → S0: IDLE
                      ↓ Cliente elige
                   S4b: AWAITING_ADDRESS ← pide datos de origen/destino
                      ↓ Parser extrae; pide campo por campo si falta algo
-                  S5: AWAITING_PAYMENT  ← genera folio PED-XXXXXX
-                     ↓ Cliente envía foto/PDF del comprobante
                   S6: PAUSED  ← notifica al admin, deadman 60 min
                      ↓ Timer expira (o admin no extiende)
                   S0: IDLE  ← lista para nueva cotización
@@ -223,8 +208,8 @@ El encargado escribe al número del bot para controlar el sistema:
 | Peso facturable | `max(peso_bascula, L×A×A / 5000)` |
 | Cargo por sobredimensión | +$175 si cualquier dimensión > 100 cm |
 | IVA | +16% sobre el total si el cliente requiere factura |
-| Tarifas | Leídas de Google Sheets con caché de 10 min |
-| Fallback de tarifas | Usa última caché si Sheets no responde |
+| Tarifas | Leídas desde Supabase `rates` con caché de 10 min |
+| Fallback de tarifas | Usa caché local mientras no expire |
 | Deduplicación | Tabla `processed_messages` con TTL 5 min |
 | Bloqueo optimista | `UPDATE` con condición `WHERE state = 'expected'` |
 | Boot recovery | Restaura timers de pausas activas al reiniciar |
@@ -340,7 +325,7 @@ docker run -d \
 |----------|----------|
 | Bot no responde | Verifica que el QR fue escaneado y `connection === 'open'` aparece en logs |
 | `SUPABASE_SERVICE_ROLE_KEY` inválida | Usa la key de tipo `service_role`, no la `anon` |
-| Google Sheets 403 | Comparte la hoja con el email de la cuenta de servicio |
+| No cotiza | Verifica que la tabla `rates` exista y que el admin haya cargado un `.xlsx` de tarifas |
 | Bucket no creado | El bot los crea automáticamente al arrancar; verifica permisos del `service_role` |
 | Mensajes duplicados | Normal — la deduplicación los filtra; revisa tabla `processed_messages` |
 | Timer no restaurado | Verifica que `pause_expires_at > NOW()` en la sesión pausada |

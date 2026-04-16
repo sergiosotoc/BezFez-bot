@@ -13,7 +13,7 @@ export async function calcBillableWeight({ largo, ancho, alto, peso }) {
 
   const pesoACobrar = fila.peso;
 
-  const oversize = Math.max(largo, ancho, alto) > config.oversizeThreshold;
+  const oversize = Math.max(largo, ancho, alto) >= config.oversizeThreshold;
   const cargoExtra = oversize ? config.oversizeCharge : 0;
 
   return {

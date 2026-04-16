@@ -6,12 +6,10 @@
 -- Enum de estados FSM
 CREATE TYPE fsm_state AS ENUM (
   'IDLE',
-  'AWAITING_FORMAT',
   'PARSING_DATA',
   'AWAITING_INVOICE',
   'AWAITING_SELECTION',
   'AWAITING_ADDRESS',
-  'AWAITING_PAYMENT',
   'PAUSED'
 );
 
@@ -27,10 +25,30 @@ CREATE TABLE IF NOT EXISTS sessions (
   oversize_charge   NUMERIC(8,2) DEFAULT 0,
   total_amount      NUMERIC(10,2),
   pending_selection TEXT,
+  pending_location  JSONB,
+  current_field     TEXT,
   paused_at         TIMESTAMPTZ,
   pause_expires_at  TIMESTAMPTZ,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Compatibilidad para proyectos donde esta migracion ya se habia ejecutado.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pending_location JSONB;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS current_field TEXT;
+
+-- ── rates ───────────────────────────────────────────────
+-- Tabla usada por services/rates.js y services/ratesUploader.js.
+CREATE TABLE IF NOT EXISTS rates (
+  peso                   NUMERIC(8,2) PRIMARY KEY,
+  estafeta_express       NUMERIC(10,2),
+  estafeta_express_iva   NUMERIC(10,2),
+  estafeta_terrestre     NUMERIC(10,2),
+  estafeta_terrestre_iva NUMERIC(10,2),
+  fedex                  NUMERIC(10,2),
+  fedex_iva              NUMERIC(10,2),
+  created_at             TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- ── orders ───────────────────────────────────────────────
@@ -95,3 +113,4 @@ ALTER TABLE orders             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE file_uploads       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE admin_pauses       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE processed_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rates              ENABLE ROW LEVEL SECURITY;

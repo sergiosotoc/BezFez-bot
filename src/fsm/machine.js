@@ -1,6 +1,7 @@
 /* src/fsm/machine.js */
+
 import { getOrCreateSession, resetSession, isSessionExpired } from '../services/supabase.js';
-import { handleIdle, handleAwaitingFormat } from './states/s1_format.js';
+import { handleIdle } from './states/s1_format.js';
 import { handleParsingData } from './states/s2_parsing.js';
 import { handleAwaitingInvoice } from './states/s3_invoice.js';
 import { handleAwaitingSelection } from './states/s4_selection.js';
@@ -8,12 +9,18 @@ import { handleAwaitingAddress } from './states/s4b_address.js';
 import { handlePaused } from './states/s6_paused.js';
 import { logger } from '../config/logger.js';
 
+/**
+ * Despachador central de la FSM.
+ * Carga la sesión desde Supabase, evalúa expiración por inactividad
+ * y rutea al handler correcto según el estado actual.
+ */
 export async function dispatch(ctx) {
   const { chatId } = ctx;
 
+  // Expiración por inactividad (TTL de 1 hora en estados activos)
   const expired = await isSessionExpired(chatId);
   if (expired) {
-    logger.info({ chatId }, 'Sesión expirada por inactividad — reseteando');
+    logger.info({ chatId }, 'Sesión expirada por inactividad — reseteando a IDLE');
     await resetSession(chatId);
   }
 
@@ -25,14 +32,6 @@ export async function dispatch(ctx) {
   switch (session.state) {
     case 'IDLE':
       return handleIdle(ctx);
-
-    case 'AWAITING_FORMAT': {
-      const result = await handleAwaitingFormat(ctx);
-      if (result === 'PROCEED_TO_PARSING') {
-        return handleParsingData(ctx);
-      }
-      return;
-    }
 
     case 'PARSING_DATA':
       return handleParsingData(ctx);
@@ -51,6 +50,7 @@ export async function dispatch(ctx) {
 
     default:
       logger.warn({ chatId, state: session.state }, 'Estado FSM desconocido — reseteando a IDLE');
+      await resetSession(chatId);
       return handleIdle(ctx);
   }
 }

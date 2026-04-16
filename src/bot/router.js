@@ -6,26 +6,35 @@ import { logger } from '../config/logger.js';
 import { extendPause, endPause } from '../services/deadman.js';
 import { processRatesExcel } from '../services/ratesUploader.js';
 import { downloadMediaMessage } from '@whiskeysockets/baileys';
+import { resetAuthStorage } from './auth.js';
 
 const rateLimitMap = new Map();
+const chatLocks = new Map();
 export const lidToPhoneMap = new Map();
 
 const ADMIN_COMMANDS = {
   EXTENDER: /^EXTENDER$/i,
   FINALIZADO: /^FINALIZADO$/i,
+  RESET_AUTH: /^RESET_AUTH$/i,
 };
+
+const userMessages = new Map();
 
 function isRateLimited(chatId) {
   const now = Date.now();
-  const data = rateLimitMap.get(chatId) || { lastMessage: 0, count: 0 };
-  const diff = now - data.lastMessage;
+  const windowMs = 3000;
 
-  if (diff > 3000) data.count = 0;
-  data.count++;
-  data.lastMessage = now;
-  rateLimitMap.set(chatId, data);
+  if (!userMessages.has(chatId)) {
+    userMessages.set(chatId, []);
+  }
 
-  return data.count > 5;
+  const timestamps = userMessages.get(chatId)
+    .filter(t => now - t < windowMs);
+
+  timestamps.push(now);
+  userMessages.set(chatId, timestamps);
+
+  return timestamps.length > 5;
 }
 
 function cleanNumber(num) {
@@ -76,6 +85,24 @@ async function resolveClientPhone(rawMessage, sock) {
 }
 
 export async function route(rawMessage, sender, sock) {
+  const chatId = rawMessage?.key?.remoteJid;
+  if (!chatId) return;
+
+  const previous = chatLocks.get(chatId) || Promise.resolve();
+  const current = previous
+    .catch(() => { })
+    .then(() => processRoute(rawMessage, sender, sock))
+    .finally(() => {
+      if (chatLocks.get(chatId) === current) {
+        chatLocks.delete(chatId);
+      }
+    });
+
+  chatLocks.set(chatId, current);
+  return current;
+}
+
+async function processRoute(rawMessage, sender, sock) {
   const chatId = rawMessage.key.remoteJid;
   if (chatId === 'status@broadcast') return;
   const msg = rawMessage.message;
@@ -188,8 +215,20 @@ async function handleAdminMessage({ chatId, text, sender, rawMessage }) {
 
   const isExtender = ADMIN_COMMANDS.EXTENDER.test(msg);
   const isFinalizado = ADMIN_COMMANDS.FINALIZADO.test(msg);
+  const isResetAuth = ADMIN_COMMANDS.RESET_AUTH.test(msg);
 
-  if (!isExtender && !isFinalizado) return false;
+  if (!isExtender && !isFinalizado && !isResetAuth) return false;
+
+  if (isResetAuth) {
+    const ok = await resetAuthStorage();
+    await sender.sendText(
+      chatId,
+      ok
+        ? '✅ Sesión de WhatsApp eliminada. Reinicia el servicio para escanear un QR nuevo.'
+        : '❌ No pude eliminar la sesión de WhatsApp. Revisa logs.'
+    );
+    return true;
+  }
 
   const contextInfo = rawMessage.message?.extendedTextMessage?.contextInfo;
   const quotedMessage = contextInfo?.quotedMessage;
