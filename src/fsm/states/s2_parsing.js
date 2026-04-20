@@ -11,6 +11,17 @@ import {
 } from '../../parsers/formParser.js';
 import { validateField } from '../../validators/formValidator.js';
 
+const defaultDeps = {
+  transitionState,
+  updateSession,
+  parseFlexibleInput,
+  detectUserInput,
+  mergeFormData,
+  getMissingFields,
+  getMissingFieldMessage,
+  validateField,
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -69,15 +80,25 @@ function rescueDimensions(data) {
  */
 // src/fsm/states/s2_parsing.js
 
-export async function handleParsingData(ctx) {
+export async function handleParsingData(ctx, deps = defaultDeps) {
   const { chatId, text, session, sender } = ctx;
+  const {
+    transitionState: transitionStateFn,
+    updateSession: updateSessionFn,
+    parseFlexibleInput: parseFlexibleInputFn,
+    detectUserInput: detectUserInputFn,
+    mergeFormData: mergeFormDataFn,
+    getMissingFields: getMissingFieldsFn,
+    getMissingFieldMessage: getMissingFieldMessageFn,
+    validateField: validateFieldFn,
+  } = deps;
   if (!text) return;
 
   const prevData = session?.form_data || {};
 
   // Parsear el mensaje actual con múltiples estrategias
-  const parsed = parseFlexibleInput(text);
-  const detection = await detectUserInput(text); // <- AGREGAR await
+  const parsed = parseFlexibleInputFn(text);
+  const detection = await detectUserInputFn(text);
 
   // Caso especial: el cliente envía solo un CP de 5 dígitos
   if (/^\d{5}$/.test(text.trim())) {
@@ -89,10 +110,10 @@ export async function handleParsingData(ctx) {
   }
 
   // Merge acumulativo
-  let merged = mergeFormData(prevData, parsed);
+  let merged = mergeFormDataFn(prevData, parsed);
 
   if (detection.hasAnyData) {
-    merged = mergeFormData(merged, detection.data);
+    merged = mergeFormDataFn(merged, detection.data);
   }
 
   // Si el mensaje es largo, buscar también datos de dirección
@@ -115,7 +136,7 @@ export async function handleParsingData(ctx) {
   // 3. Validar después
   const cleanMerged = {};
   Object.keys(merged).forEach(key => {
-    if (validateField(key, merged[key])) {
+    if (validateFieldFn(key, merged[key])) {
       cleanMerged[key] = merged[key];
     } else {
       // 🔥 LOG CRÍTICO PARA TESTING
@@ -124,13 +145,13 @@ export async function handleParsingData(ctx) {
   });
 
   // Persistir estado actualizado
-  await updateSession(chatId, { form_data: cleanMerged });
+  await updateSessionFn(chatId, { form_data: cleanMerged });
 
   // Verificar si ya tenemos todo lo necesario
-  const missing = getMissingFields(cleanMerged);
+  const missing = getMissingFieldsFn(cleanMerged);
 
   if (missing.length === 0) {
-    const { success } = await transitionState(
+    const { success } = await transitionStateFn(
       chatId,
       'PARSING_DATA',
       'AWAITING_INVOICE',
@@ -147,5 +168,5 @@ export async function handleParsingData(ctx) {
   }
 
   // Pedir el siguiente campo faltante
-  await sender.sendText(chatId, getMissingFieldMessage(missing));
+  await sender.sendText(chatId, getMissingFieldMessageFn(missing));
 }

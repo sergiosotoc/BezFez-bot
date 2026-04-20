@@ -5,7 +5,7 @@ import { logger } from './config/logger.js';
 
 const PORT = process.env.PORT || 3000;
 
-export function startServer() {
+export function startServer(port = PORT) {
   const server = http.createServer((req, res) => {
     if (req.url === '/health' || req.url === '/') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -16,8 +16,8 @@ export function startServer() {
     res.end();
   });
 
-  server.listen(PORT, () => {
-    logger.info({ port: PORT }, 'Servidor HTTP activo');
+  server.listen(port, () => {
+    logger.info({ port }, 'Servidor HTTP activo');
   });
 
   return server;

@@ -9,6 +9,14 @@ import {
   parseFormatoLibre,
 } from '../../parsers/formParser.js';
 
+const defaultDeps = {
+  updateSession,
+  parseFlexibleInput,
+  getMissingFieldMessage,
+  detectUserInput,
+  mergeFormData,
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MENSAJES
 // ─────────────────────────────────────────────────────────────────────────────
@@ -97,8 +105,15 @@ function extractAddressDataFromInitialMessage(text) {
  */
 // src/fsm/states/s1_format.js
 
-export async function handleIdle(ctx) {
+export async function handleIdle(ctx, deps = defaultDeps) {
   const { chatId, messageType, text, sender } = ctx;
+  const {
+    updateSession: updateSessionFn,
+    parseFlexibleInput: parseFlexibleInputFn,
+    getMissingFieldMessage: getMissingFieldMessageFn,
+    detectUserInput: detectUserInputFn,
+    mergeFormData: mergeFormDataFn,
+  } = deps;
 
   if (messageType !== 'text') {
 await sender.sendText(chatId, 'Por ahora solo puedo procesar texto 😊');
@@ -106,16 +121,16 @@ await sender.sendText(chatId, 'Por ahora solo puedo procesar texto 😊');
   }
 
   // Extraer datos básicos
-  const detection = await detectUserInput(text); // <- AGREGAR await
-  const parsed = parseFlexibleInput(text);
+  const detection = await detectUserInputFn(text);
+  const parsed = parseFlexibleInputFn(text);
 
   // Combinar ambas fuentes
-  let combined = mergeFormData(parsed, detection.data);
+  let combined = mergeFormDataFn(parsed, detection.data);
 
   // Si el mensaje es largo, intentar también parseo de formato libre
   const addressData = extractAddressDataFromInitialMessage(text);
   if (Object.keys(addressData).length > 0) {
-    combined = mergeFormData(combined, addressData);
+    combined = mergeFormDataFn(combined, addressData);
   }
 
   // ¿El mensaje tiene algo útil?
@@ -136,7 +151,7 @@ await sender.sendText(chatId, 'Por ahora solo puedo procesar texto 😊');
   // Determinar el siguiente estado
   const nextState = missing.length === 0 ? 'AWAITING_INVOICE' : 'PARSING_DATA';
 
-  await updateSession(chatId, {
+  await updateSessionFn(chatId, {
     state: nextState,
     form_data: combined,
   });
@@ -147,6 +162,6 @@ await sender.sendText(chatId, 'Por ahora solo puedo procesar texto 😊');
       '¡Perfecto! Ya tengo todos los datos del paquete 📦\n\n¿Necesitas *factura* (con IVA)?\n1️⃣ Sí\n2️⃣ No'
     );
   } else {
-    await sender.sendText(chatId, getMissingFieldMessage(missing));
+    await sender.sendText(chatId, getMissingFieldMessageFn(missing));
   }
 }

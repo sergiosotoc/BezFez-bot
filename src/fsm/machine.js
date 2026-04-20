@@ -9,48 +9,71 @@ import { handleAwaitingAddress } from './states/s4b_address.js';
 import { handlePaused } from './states/s6_paused.js';
 import { logger } from '../config/logger.js';
 
+const defaultDeps = {
+  getOrCreateSession,
+  resetSession,
+  isSessionExpired,
+  handleIdle,
+  handleParsingData,
+  handleAwaitingInvoice,
+  handleAwaitingSelection,
+  handleAwaitingAddress,
+  handlePaused,
+};
+
 /**
  * Despachador central de la FSM.
  * Carga la sesión desde Supabase, evalúa expiración por inactividad
  * y rutea al handler correcto según el estado actual.
  */
-export async function dispatch(ctx) {
+export async function dispatch(ctx, deps = defaultDeps) {
   const { chatId } = ctx;
+  const {
+    getOrCreateSession: getOrCreateSessionFn,
+    resetSession: resetSessionFn,
+    isSessionExpired: isSessionExpiredFn,
+    handleIdle: handleIdleFn,
+    handleParsingData: handleParsingDataFn,
+    handleAwaitingInvoice: handleAwaitingInvoiceFn,
+    handleAwaitingSelection: handleAwaitingSelectionFn,
+    handleAwaitingAddress: handleAwaitingAddressFn,
+    handlePaused: handlePausedFn,
+  } = deps;
 
   // Expiración por inactividad (TTL de 1 hora en estados activos)
-  const expired = await isSessionExpired(chatId);
+  const expired = await isSessionExpiredFn(chatId);
   if (expired) {
     logger.info({ chatId }, 'Sesión expirada por inactividad — reseteando a IDLE');
-    await resetSession(chatId);
+    await resetSessionFn(chatId);
   }
 
-  const session = await getOrCreateSession(chatId);
+  const session = await getOrCreateSessionFn(chatId);
   ctx.session = session;
 
   logger.debug({ chatId, state: session.state, msgType: ctx.messageType }, 'FSM dispatch');
 
   switch (session.state) {
     case 'IDLE':
-      return handleIdle(ctx);
+      return handleIdleFn(ctx);
 
     case 'PARSING_DATA':
-      return handleParsingData(ctx);
+      return handleParsingDataFn(ctx);
 
     case 'AWAITING_INVOICE':
-      return handleAwaitingInvoice(ctx);
+      return handleAwaitingInvoiceFn(ctx);
 
     case 'AWAITING_SELECTION':
-      return handleAwaitingSelection(ctx);
+      return handleAwaitingSelectionFn(ctx);
 
     case 'AWAITING_ADDRESS':
-      return handleAwaitingAddress(ctx);
+      return handleAwaitingAddressFn(ctx);
 
     case 'PAUSED':
-      return handlePaused(ctx);
+      return handlePausedFn(ctx);
 
     default:
       logger.warn({ chatId, state: session.state }, 'Estado FSM desconocido — reseteando a IDLE');
-      await resetSession(chatId);
-      return handleIdle(ctx);
+      await resetSessionFn(chatId);
+      return handleIdleFn(ctx);
   }
 }

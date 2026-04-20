@@ -2,10 +2,22 @@
 
 import { transitionState, updateSession } from '../../services/supabase.js';
 import { parseCarrierSelection } from '../../parsers/formParser.js';
-import { needsAddressCollection, buildInitialAddressRequest } from './s4b_address.js';
+import { needsAddressCollection, buildInitialAddressRequest, enrichAddressLocations } from './s4b_address.js';
 import { formatAdminSummary } from '../../services/calculator.js';
 import { startPause } from '../../services/deadman.js';
 import { config } from '../../config/index.js';
+
+const defaultDeps = {
+  transitionState,
+  updateSession,
+  parseCarrierSelection,
+  needsAddressCollection,
+  buildInitialAddressRequest,
+  enrichAddressLocations,
+  formatAdminSummary,
+  startPause,
+  adminJid: config.admin.jid,
+};
 
 const UNKNOWN_SELECTION_MSG = (quotes) => {
   const lines = [
@@ -24,8 +36,19 @@ const UNKNOWN_SELECTION_MSG = (quotes) => {
   return lines.join('\n');
 };
 
-export async function handleAwaitingSelection(ctx) {
+export async function handleAwaitingSelection(ctx, deps = defaultDeps) {
   const { chatId, text, session, sender, clientPhone, pushName } = ctx;
+  const {
+    transitionState: transitionStateFn,
+    updateSession: updateSessionFn,
+    parseCarrierSelection: parseCarrierSelectionFn,
+    needsAddressCollection: needsAddressCollectionFn,
+    buildInitialAddressRequest: buildInitialAddressRequestFn,
+    enrichAddressLocations: enrichAddressLocationsFn = async data => data,
+    formatAdminSummary: formatAdminSummaryFn,
+    startPause: startPauseFn,
+    adminJid,
+  } = deps;
 
   if (!text) return;
 
@@ -97,7 +120,7 @@ export async function handleAwaitingSelection(ctx) {
   }
 
   if (selection) {
-    await updateSession(chatId, { pending_selection: null });
+    await updateSessionFn(chatId, { pending_selection: null });
   }
 
   // ─────────────────────────────────────────
@@ -105,7 +128,7 @@ export async function handleAwaitingSelection(ctx) {
   // ─────────────────────────────────────────
 
   if (!selection) {
-    const parsed = parseCarrierSelection(text);
+    const parsed = parseCarrierSelectionFn(text);
 
     // 🔥 PRIORIDAD 1: selección directa (número o match exacto)
     if (parsed?.id) {
@@ -114,7 +137,7 @@ export async function handleAwaitingSelection(ctx) {
 
     // 🔥 PRIORIDAD 2: ambigüedad
     else if (parsed?.ambiguous === 'terrestre') {
-      await updateSession(chatId, { pending_selection: 'terrestre' });
+      await updateSessionFn(chatId, { pending_selection: 'terrestre' });
       await sender.sendText(
         chatId,
         '¿Prefieres *Estafeta Terrestre* 🚚 o *FedEx Terrestre* 📦?\n\nResponde: ESTAFETA o FEDEX'
@@ -123,7 +146,7 @@ export async function handleAwaitingSelection(ctx) {
     }
 
     else if (parsed?.ambiguous === true) {
-      await updateSession(chatId, { pending_selection: 'estafeta' });
+      await updateSessionFn(chatId, { pending_selection: 'estafeta' });
       await sender.sendText(
         chatId,
         '¿Deseas *Estafeta Express* 🚀 o *Estafeta Terrestre* 🚚?\n\nResponde: EXPRESS o TERRESTRE'
@@ -151,8 +174,10 @@ export async function handleAwaitingSelection(ctx) {
   // VALIDACIÓN FINAL (CRÍTICO)
   // ─────────────────────────────────────────
 
-  if (needsAddressCollection(form_data)) {
-    const { success } = await transitionState(
+  const enrichedFormData = await enrichAddressLocationsFn(form_data);
+
+  if (needsAddressCollectionFn(enrichedFormData)) {
+    const { success } = await transitionStateFn(
       chatId,
       'AWAITING_SELECTION',
       'AWAITING_ADDRESS',
@@ -160,13 +185,13 @@ export async function handleAwaitingSelection(ctx) {
         selected_carrier: chosen.label,
         total_amount: chosen.total,
         pending_selection: null,
-        form_data: form_data,
+        form_data: enrichedFormData,
       }
     );
 
     if (!success) return;
 
-    await sender.sendText(chatId, buildInitialAddressRequest(form_data));
+    await sender.sendText(chatId, buildInitialAddressRequestFn(enrichedFormData));
     return;
   }
 
@@ -176,14 +201,14 @@ export async function handleAwaitingSelection(ctx) {
 
   const folio = `PED-${Date.now()}`;
 
-  const adminSummary = formatAdminSummary({
+  const adminSummary = formatAdminSummaryFn({
     folio,
     carrier: chosen.label,
     total: chosen.total,
     clientJid: chatId,
     clientPhone,
     pushName,
-    formData: form_data,
+    formData: enrichedFormData,
     calc: {
       pesoFacturable: billable_weight,
       oversize: (oversize_charge || 0) > 0,
@@ -192,7 +217,7 @@ export async function handleAwaitingSelection(ctx) {
   });
 
   // 📩 Enviar al admin
-  await sender.sendText(config.admin.jid, adminSummary);
+  await sender.sendText(adminJid, adminSummary);
 
   // 📲 Notificar cliente
   await sender.sendText(
@@ -206,7 +231,7 @@ Si hay algún ajuste en el precio, se te notificará antes de generar la guía.`
   );
 
   // ⏸️ Pasar a PAUSED
-  const { success } = await transitionState(
+  const { success } = await transitionStateFn(
     chatId,
     'AWAITING_SELECTION',
     'PAUSED'
@@ -215,5 +240,5 @@ Si hay algún ajuste en el precio, se te notificará antes de generar la guía.`
   if (!success) return;
 
   // ⏱️ Activar deadman
-  await startPause(chatId, folio, pushName || chatId);
+  await startPauseFn(chatId, folio, pushName || chatId);
 }

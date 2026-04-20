@@ -12,6 +12,19 @@ import {
 import { calcBillableWeight, buildQuotes, formatQuoteMessage } from '../../services/calculator.js';
 import { logger } from '../../config/logger.js';
 
+const defaultDeps = {
+  transitionState,
+  updateSession,
+  parseInvoiceResponse,
+  detectUserInput,
+  mergeFormData,
+  getMissingFieldMessage,
+  getMissingFields,
+  calcBillableWeight,
+  buildQuotes,
+  formatQuoteMessage,
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
@@ -69,31 +82,43 @@ const MAINTENANCE_MSG = 'Lo siento, el sistema de cotizaciones no está disponib
 // HANDLER
 // ─────────────────────────────────────────────────────────────────────────────
 
-export async function handleAwaitingInvoice(ctx) {
+export async function handleAwaitingInvoice(ctx, deps = defaultDeps) {
   const { chatId, text, session, sender } = ctx;
+  const {
+    transitionState: transitionStateFn,
+    updateSession: updateSessionFn,
+    parseInvoiceResponse: parseInvoiceResponseFn,
+    detectUserInput: detectUserInputFn,
+    mergeFormData: mergeFormDataFn,
+    getMissingFieldMessage: getMissingFieldMessageFn,
+    getMissingFields: getMissingFieldsFn,
+    calcBillableWeight: calcBillableWeightFn,
+    buildQuotes: buildQuotesFn,
+    formatQuoteMessage: formatQuoteMessageFn,
+  } = deps;
   if (!text) return;
 
-  const detection = await detectUserInput(text);
+  const detection = await detectUserInputFn(text);
   let currentFormData = session?.form_data || {};
 
   // Enriquecer con datos de dirección si el mensaje es suficientemente largo
   if (text.length > 50) {
     const addressData = extractAddressData(text);
     if (Object.keys(addressData).length > 0) {
-      currentFormData = mergeFormData(currentFormData, addressData);
+      currentFormData = mergeFormDataFn(currentFormData, addressData);
     }
   }
 
   // Enriquecer con datos básicos detectados (medidas, peso, CPs)
   if (detection.hasAnyData) {
-    currentFormData = mergeFormData(currentFormData, detection.data);
+    currentFormData = mergeFormDataFn(currentFormData, detection.data);
   }
 
   // Una sola llamada a updateSession consolidando todos los cambios
-  await updateSession(chatId, { form_data: currentFormData });
+  await updateSessionFn(chatId, { form_data: currentFormData });
 
   // ── Parsear la respuesta de factura ──────────────────────────────────────
-  const answer = parseInvoiceResponse(text);
+  const answer = parseInvoiceResponseFn(text);
 
   if (/cuanto|precio|costo/i.test(text) && answer === 'ambiguous') {
     await sender.sendText(
@@ -112,27 +137,27 @@ export async function handleAwaitingInvoice(ctx) {
 
   // ── Validar que tenemos todos los datos básicos ──────────────────────────
   const validatedData = rescueDimensions(currentFormData);
-  const missing = getMissingFields(validatedData);
+  const missing = getMissingFieldsFn(validatedData);
 
   if (missing.length > 0) {
     logger.warn({ chatId, missing }, 'Datos incompletos en AWAITING_INVOICE');
-    await updateSession(chatId, { form_data: validatedData });
-    await sender.sendText(chatId, getMissingFieldMessage(missing));
+    await updateSessionFn(chatId, { form_data: validatedData });
+    await sender.sendText(chatId, getMissingFieldMessageFn(missing));
     return;
   }
 
   // ── Calcular y cotizar ───────────────────────────────────────────────────
   try {
-    const calc = await calcBillableWeight({
+    const calc = await calcBillableWeightFn({
       largo: validatedData.largo,
       ancho: validatedData.ancho,
       alto: validatedData.alto,
       peso: validatedData.peso,
     });
 
-    const quotes = await buildQuotes(calc, invoice);
+    const quotes = await buildQuotesFn(calc, invoice);
 
-    const { success } = await transitionState(
+    const { success } = await transitionStateFn(
       chatId,
       'AWAITING_INVOICE',
       'AWAITING_SELECTION',
@@ -149,7 +174,7 @@ export async function handleAwaitingInvoice(ctx) {
 
     if (!success) return;
 
-    const quoteMsg = formatQuoteMessage({
+    const quoteMsg = formatQuoteMessageFn({
       pesoACobrar: calc.pesoACobrar,
       oversize: calc.oversize,
       invoice,

@@ -1,5 +1,4 @@
 /* src/parsers/formParser.js */
-import { validateField } from '../validators/formValidator.js';
 
 function normalize(str) {
   return str
@@ -51,6 +50,27 @@ function extractField(originalText, normText, ...patterns) {
 
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function stripLeadingLabel(value, labels) {
+  if (!value) return value;
+
+  const labelPattern = labels.join('|');
+  return String(value)
+    .replace(new RegExp(`^\\s*(?:${labelPattern})(?:\\s+(?:origen|destino|completo))?\\s*[:\\-]?\\s*`, 'i'), '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cleanName(value) {
+  return stripLeadingLabel(value, [
+    'nombre',
+    'remitente',
+    'destinatario',
+    'receptor',
+    'envia',
+    'recibe',
+  ]);
 }
 
 function extractCP(text, side) {
@@ -206,11 +226,16 @@ function parsePersonBlock(block) {
     }
 
     // 1. NOMBRE
-    const nombreMatch = n.match(/^nombre\s+(?:completo|origen|destino)?\s*:?\s*(.+)$/i) ||
-      n.match(/^(remitente|destinatario|receptor)\s*:?\s*(.+)$/i);
+    const nombreMatch = n.match(/^nombre(?:\s+(?:completo|origen|destino))?\s*:?\s*(.+)$/i);
     if (nombreMatch) {
-      const value = nombreMatch[3] || nombreMatch[2] || '';
-      data.nombre = takeTrailingValue(value);
+      data.nombre = cleanName(takeTrailingValue(nombreMatch[1]));
+      continue;
+    }
+
+    const roleNameMatch = n.match(/^(remitente|destinatario|receptor)\s*:?\s*(.+)$/i);
+    if (roleNameMatch) {
+      data.nombre = cleanName(takeTrailingValue(roleNameMatch[2]));
+      continue;
     }
 
     // 2. DIRECCIÓN / CALLE
@@ -290,7 +315,7 @@ function parsePersonBlock(block) {
   if (!data.nombre && posQueue.length > 0) {
     const nameIdx = posQueue.findIndex(l => !/\d/.test(l) && l.length > 2 && !l.includes(','));
     if (nameIdx !== -1) {
-      data.nombre = posQueue.splice(nameIdx, 1)[0];
+      data.nombre = cleanName(posQueue.splice(nameIdx, 1)[0]);
     }
   }
 

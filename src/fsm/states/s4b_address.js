@@ -15,15 +15,29 @@ import { logger } from '../../config/logger.js';
 const geoCache = new Map();
 
 async function resolveLocationSmart(colonia, cp = null) {
-  if (!colonia) return null;
-  const key = `${colonia}|${cp || ''}`.toLowerCase().trim();
+  const hasCp = cp && /^\d{5}$/.test(String(cp).trim());
+  if (!colonia && !hasCp) return null;
+
+  const query = colonia || String(cp).trim();
+  const key = `${query}|${cp || ''}`.toLowerCase().trim();
 
   if (geoCache.has(key)) return geoCache.get(key);
 
-  const result = await getLocationData(colonia, cp);
+  const result = await getLocationData(query, cp);
   if (result) geoCache.set(key, result);
 
   return result;
+}
+
+async function resolveAddressLocation(colonia, cp = null) {
+  const loc = await resolveLocationSmart(colonia, cp);
+  if (loc?.ciudad && loc?.estado) return loc;
+
+  if (cp && /^\d{5}$/.test(String(cp).trim())) {
+    return resolveLocationSmart(null, cp);
+  }
+
+  return null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -154,7 +168,7 @@ function buildAddressForm(missingFields) {
 // VALIDACIÓN Y ASIGNACIÓN DE CAMPO
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function assignRequestedFieldValue({ chatId, sender, fieldToFill, value, merged }) {
+export async function assignRequestedFieldValue({ chatId, sender, fieldToFill, value, merged }) {
   if (!fieldToFill) return false;
 
   if (fieldToFill === 'contenido') {
@@ -211,22 +225,27 @@ async function assignRequestedFieldValue({ chatId, sender, fieldToFill, value, m
 
 async function fixLocationConsistency(merged) {
   // DESTINO
-  if (merged.colonia_destino && isSuspiciousCity(merged.ciudad_destino)) {
-    const loc = await resolveLocationSmart(merged.colonia_destino, merged.cp_destino);
+  if ((merged.colonia_destino || merged.cp_destino) && isSuspiciousCity(merged.ciudad_destino)) {
+    const loc = await resolveAddressLocation(merged.colonia_destino, merged.cp_destino);
     if (loc?.ciudad && loc?.estado) {
       merged.ciudad_destino = `${loc.ciudad}, ${loc.estado}`;
     }
   }
 
   // ORIGEN
-  if (merged.colonia_origen && isSuspiciousCity(merged.ciudad_origen)) {
-    const loc = await resolveLocationSmart(merged.colonia_origen, merged.cp_origen);
+  if ((merged.colonia_origen || merged.cp_origen) && isSuspiciousCity(merged.ciudad_origen)) {
+    const loc = await resolveAddressLocation(merged.colonia_origen, merged.cp_origen);
     if (loc?.ciudad && loc?.estado) {
       merged.ciudad_origen = `${loc.ciudad}, ${loc.estado}`;
     }
   }
 
   return merged;
+}
+
+export async function enrichAddressLocations(formData = {}) {
+  const merged = { ...formData };
+  return fixLocationConsistency(merged);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -372,7 +391,7 @@ export async function handleAwaitingAddress(ctx) {
     // Geocodificación previa al merge — DESTINO
     if (!merged.ciudad_destino && libreData.colonia_destino) {
       const cp = libreData.cp_destino || merged.cp_destino;
-      const loc = await resolveLocationSmart(libreData.colonia_destino, cp);
+      const loc = await resolveAddressLocation(libreData.colonia_destino, cp);
       if (loc?.ciudad && loc?.estado) {
         const ciudadDetectada = `${loc.ciudad}, ${loc.estado}`;
         await updateSession(chatId, {
@@ -388,7 +407,7 @@ export async function handleAwaitingAddress(ctx) {
     // Geocodificación previa al merge — ORIGEN
     if (!merged.ciudad_origen && libreData.colonia_origen) {
       const cp = libreData.cp_origen || merged.cp_origen;
-      const loc = await resolveLocationSmart(libreData.colonia_origen, cp);
+      const loc = await resolveAddressLocation(libreData.colonia_origen, cp);
       if (loc?.ciudad && loc?.estado) {
         const ciudadDetectada = `${loc.ciudad}, ${loc.estado}`;
         await updateSession(chatId, {
@@ -415,9 +434,17 @@ export async function handleAwaitingAddress(ctx) {
 
     // Intentar resolver ciudad de destino desde colonia si aún falta
     if (merged.cp_destino && merged.colonia_destino && !merged.ciudad_destino) {
-      const loc = await resolveLocationSmart(merged.colonia_destino, merged.cp_destino);
+      const loc = await resolveAddressLocation(merged.colonia_destino, merged.cp_destino);
       if (loc?.ciudad && loc?.estado) {
         merged.ciudad_destino = `${loc.ciudad}, ${loc.estado}`;
+      }
+    }
+
+    // Intentar resolver ciudad de origen desde colonia si aún falta
+    if (merged.cp_origen && merged.colonia_origen && !merged.ciudad_origen) {
+      const loc = await resolveAddressLocation(merged.colonia_origen, merged.cp_origen);
+      if (loc?.ciudad && loc?.estado) {
+        merged.ciudad_origen = `${loc.ciudad}, ${loc.estado}`;
       }
     }
 
@@ -476,7 +503,7 @@ export async function handleAwaitingAddress(ctx) {
   // ── Confirmar si la ciudad se resolvió automáticamente y es nueva ────────
   // (aplica para el caso de formato libre sin geo previa)
   if (merged.colonia_destino && isSuspiciousCity(merged.ciudad_destino)) {
-    const loc = await resolveLocationSmart(merged.colonia_destino, merged.cp_destino);
+    const loc = await resolveAddressLocation(merged.colonia_destino, merged.cp_destino);
     if (loc?.ciudad && loc?.estado) {
       const ciudadDetectada = `${loc.ciudad}, ${loc.estado}`;
       await updateSession(chatId, {
@@ -491,6 +518,21 @@ export async function handleAwaitingAddress(ctx) {
   }
 
   // ── Evaluar campos faltantes tras el merge ───────────────────────────────
+  if (merged.colonia_origen && isSuspiciousCity(merged.ciudad_origen)) {
+    const loc = await resolveAddressLocation(merged.colonia_origen, merged.cp_origen);
+    if (loc?.ciudad && loc?.estado) {
+      const ciudadDetectada = `${loc.ciudad}, ${loc.estado}`;
+      await updateSession(chatId, {
+        form_data: merged,
+        pending_location: { type: 'origen', value: ciudadDetectada },
+      });
+      await sender.sendText(chatId,
+        `DetectÃ© para ORIGEN:\n\nðŸ“ ${ciudadDetectada}\n\nÂ¿Es correcto?\n1ï¸âƒ£ SÃ­\n2ï¸âƒ£ No`
+      );
+      return;
+    }
+  }
+
   const missingAfter = getMissingFields(merged);
   await updateSession(chatId, { form_data: merged });
 
@@ -561,3 +603,9 @@ export function needsAddressCollection(formData) {
 export function buildInitialAddressRequest(formData) {
   return buildAddressForm(getMissingFields(formData));
 }
+
+export const __private__ = {
+  buildAddressForm,
+  getMissingFields,
+  isSuspiciousCity,
+};

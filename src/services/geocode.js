@@ -1,6 +1,4 @@
 /* src/services/geocode.js */
-
-import fetch from 'node-fetch';
 import { config } from '../config/index.js';
 import { logger } from '../config/logger.js';
 
@@ -16,7 +14,7 @@ export async function getLocationData(query, cp = null) {
 
   // Enriquecer la query con el CP y país para mayor precisión
   const parts = [query.trim()];
-  if (cp && /^\d{5}$/.test(cp)) parts.push(cp);
+  if (cp && /^\d{5}$/.test(cp) && query.trim() !== cp) parts.push(cp);
   parts.push('Mexico');
   const enrichedQuery = parts.join(', ');
 

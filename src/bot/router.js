@@ -18,6 +18,19 @@ const ADMIN_COMMANDS = {
   RESET_AUTH: /^RESET_AUTH$/i,
 };
 
+const defaultDeps = {
+  markMessageProcessed,
+  resetSession,
+  dispatch,
+  extendPause,
+  endPause,
+  processRatesExcel,
+  downloadMediaMessage,
+  resetAuthStorage,
+  adminPhone: config.admin.phone,
+  adminJid: config.admin.jid,
+};
+
 const userMessages = new Map();
 
 function isRateLimited(chatId) {
@@ -84,14 +97,14 @@ async function resolveClientPhone(rawMessage, sock) {
   return 'desconocido';
 }
 
-export async function route(rawMessage, sender, sock) {
+export async function route(rawMessage, sender, sock, deps = defaultDeps) {
   const chatId = rawMessage?.key?.remoteJid;
   if (!chatId) return;
 
   const previous = chatLocks.get(chatId) || Promise.resolve();
   const current = previous
     .catch(() => { })
-    .then(() => processRoute(rawMessage, sender, sock))
+    .then(() => processRoute(rawMessage, sender, sock, deps))
     .finally(() => {
       if (chatLocks.get(chatId) === current) {
         chatLocks.delete(chatId);
@@ -102,7 +115,16 @@ export async function route(rawMessage, sender, sock) {
   return current;
 }
 
-async function processRoute(rawMessage, sender, sock) {
+async function processRoute(rawMessage, sender, sock, deps = defaultDeps) {
+  const {
+    markMessageProcessed: markMessageProcessedFn,
+    resetSession: resetSessionFn,
+    dispatch: dispatchFn,
+    processRatesExcel: processRatesExcelFn,
+    downloadMediaMessage: downloadMediaMessageFn,
+    adminPhone,
+    adminJid,
+  } = deps;
   const chatId = rawMessage.key.remoteJid;
   if (chatId === 'status@broadcast') return;
   const msg = rawMessage.message;
@@ -124,7 +146,7 @@ async function processRoute(rawMessage, sender, sock) {
   }
 
   const messageId = key.id;
-  const isNew = await markMessageProcessed(messageId, chatId);
+  const isNew = await markMessageProcessedFn(messageId, chatId);
   if (!isNew) {
     logger.debug({ messageId, chatId }, 'Mensaje duplicado ignorado');
     return;
@@ -137,14 +159,20 @@ async function processRoute(rawMessage, sender, sock) {
 
   const normalizedText = text?.trim().toLowerCase();
   if (normalizedText === 'hola') {
-    await resetSession(chatId);
-    const ctx = { chatId, clientPhone, pushName, messageType, text, message: msg, rawMessage, sender };
-    await dispatch(ctx);
+    logger.info({ chatId, clientPhone, previousStateHint: 'reset-by-hola' }, 'Reiniciando sesión por saludo del cliente');
+    try {
+      await resetSessionFn(chatId);
+      const ctx = { chatId, clientPhone, pushName, messageType, text, message: msg, rawMessage, sender };
+      await dispatchFn(ctx);
+    } catch (err) {
+      logger.error({ chatId, err: err.message, stack: err.stack }, 'Error al reiniciar flujo con "hola"');
+      await sender.sendText(chatId, 'Ocurrió un error inesperado. Escribe "hola" para reiniciar.').catch(() => { });
+    }
     return;
   }
 
-  const cleanAdminPhone = config.admin.phone.replace(/\D/g, '');
-  const isAdmin = (chatId === config.admin.jid) || (clientPhone && clientPhone.includes(cleanAdminPhone));
+  const cleanAdminPhone = adminPhone.replace(/\D/g, '');
+  const isAdmin = (chatId === adminJid) || (clientPhone && clientPhone.includes(cleanAdminPhone));
 
   if (isAdmin && messageType === 'documentMessage') {
     const doc = rawMessage.message.documentMessage;
@@ -157,7 +185,7 @@ async function processRoute(rawMessage, sender, sock) {
     }
 
     try {
-      const buffer = await downloadMediaMessage(
+      const buffer = await downloadMediaMessageFn(
         rawMessage,
         'buffer',
         {},
@@ -167,7 +195,7 @@ async function processRoute(rawMessage, sender, sock) {
         }
       );
 
-      const count = await processRatesExcel(buffer);
+      const count = await processRatesExcelFn(buffer);
 
       await sender.sendText(chatId, `✅ Tarifas actualizadas (${count} filas)`);
 
@@ -180,13 +208,13 @@ async function processRoute(rawMessage, sender, sock) {
   }
 
   if (isAdmin) {
-    const wasCommand = await handleAdminMessage({ chatId, text, sender, rawMessage });
+    const wasCommand = await handleAdminMessage({ chatId, text, sender, rawMessage }, deps);
     if (wasCommand) return;
   }
 
   const ctx = { chatId, clientPhone, pushName, messageType, text, message: msg, rawMessage, sender };
   try {
-    await dispatch(ctx);
+    await dispatchFn(ctx);
   } catch (err) {
     logger.error({ chatId, err: err.message, stack: err.stack }, 'Error no manejado en FSM');
     await sender.sendText(chatId, 'Ocurrió un error inesperado. Escribe "hola" para reiniciar.').catch(() => { });
@@ -210,7 +238,12 @@ function extractText(msg, messageType) {
   return null;
 }
 
-async function handleAdminMessage({ chatId, text, sender, rawMessage }) {
+async function handleAdminMessage({ chatId, text, sender, rawMessage }, deps = defaultDeps) {
+  const {
+    extendPause: extendPauseFn,
+    endPause: endPauseFn,
+    resetAuthStorage: resetAuthStorageFn,
+  } = deps;
   const msg = text?.trim().toUpperCase() || '';
 
   const isExtender = ADMIN_COMMANDS.EXTENDER.test(msg);
@@ -220,7 +253,7 @@ async function handleAdminMessage({ chatId, text, sender, rawMessage }) {
   if (!isExtender && !isFinalizado && !isResetAuth) return false;
 
   if (isResetAuth) {
-    const ok = await resetAuthStorage();
+    const ok = await resetAuthStorageFn();
     await sender.sendText(
       chatId,
       ok
@@ -249,10 +282,10 @@ async function handleAdminMessage({ chatId, text, sender, rawMessage }) {
 
   // 3. Ejecutar la acción
   if (isFinalizado) {
-    await endPause(targetJid);
+    await endPauseFn(targetJid);
     await sender.sendText(chatId, '✅ Sesión del cliente liberada exitosamente. El bot lo volverá a atender.');
   } else if (isExtender) {
-    await extendPause(targetJid);
+    await extendPauseFn(targetJid);
   }
 
   return true;
@@ -266,3 +299,19 @@ setInterval(() => {
     }
   }
 }, 10 * 60 * 1000);
+
+export const __private__ = {
+  isRateLimited,
+  cleanNumber,
+  resolveClientPhone,
+  resolveMessageType,
+  extractText,
+  handleAdminMessage,
+  processRoute,
+  resetTestState() {
+    userMessages.clear();
+    rateLimitMap.clear();
+    chatLocks.clear();
+    lidToPhoneMap.clear();
+  },
+};

@@ -57,6 +57,16 @@ export async function buildQuotes({ pesoACobrar, cargoExtra }, invoice) {
   });
 }
 
+function cleanSummaryLabel(value, labels) {
+  if (value === null || value === undefined) return value;
+
+  const labelPattern = labels.join('|');
+  return String(value)
+    .replace(new RegExp(`^\\s*(?:${labelPattern})(?:\\s+(?:origen|destino|completo))?\\s*[:\\-]?\\s*`, 'i'), '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function formatQuoteMessage({
   pesoACobrar,
   oversize,
@@ -131,6 +141,8 @@ export function formatAdminSummary({
   } = formData;
 
   const clienteLabel = pushName || 'Cliente WhatsApp';
+  const nombreOrigen = cleanSummaryLabel(nombre_origen, ['nombre', 'remitente', 'envia']);
+  const nombreDestino = cleanSummaryLabel(nombre_destino, ['nombre', 'destinatario', 'receptor', 'recibe']);
 
   const lines = [
     '*COMPROBANTE RECIBIDO*',
@@ -148,7 +160,7 @@ export function formatAdminSummary({
     `Cargo por medidas >1m: ${calc.oversize ? `Sí (+$${config.oversizeCharge})` : 'No'}`,
     '',
     '*ORIGEN*',
-    `Nombre Origen: ${nombre_origen}`,
+    `Nombre Origen: ${nombreOrigen}`,
     `Calle y Número Origen: ${calle_origen}`,
     `Colonia Origen: ${colonia_origen}`,
     `Ciudad y Estado Origen: ${ciudad_origen}`,
@@ -156,7 +168,7 @@ export function formatAdminSummary({
     `Cel Origen: ${cel_origen}`,
     '',
     '*DESTINO*',
-    `Nombre Destino: ${nombre_destino}`,
+    `Nombre Destino: ${nombreDestino}`,
     `Calle y Número Destino: ${calle_destino}`,
     `Colonia Destino: ${colonia_destino}`,
     `Ciudad y Estado Destino: ${ciudad_destino}`,
