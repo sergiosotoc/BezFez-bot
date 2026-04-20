@@ -15,6 +15,7 @@ const { assignRequestedFieldValue, needsAddressCollection, buildInitialAddressRe
 const { dispatch: machineDispatch } = await import('../src/fsm/machine.js');
 const { handlePaused } = await import('../src/fsm/states/s6_paused.js');
 const router = await import('../src/bot/router.js');
+const { handleMessagesUpsert } = await import('../src/bot/index.js');
 const { startServer } = await import('../src/server.js');
 const { formatAdminSummary } = await import('../src/services/calculator.js');
 
@@ -101,6 +102,9 @@ await run('S1-02 IDLE con datos completos pasa a AWAITING_INVOICE', async () => 
   );
 
   assert.equal(updated.state, 'AWAITING_INVOICE');
+  assert.equal(updated.selected_carrier, null);
+  assert.equal(updated.total_amount, null);
+  assert.equal(updated.pending_location, null);
   assert.equal(updated.form_data.cp_origen, '64000');
   assert.equal(updated.form_data.cp_destino, '06600');
   assert.equal(updated.form_data.medidas, '30x20x15');
@@ -160,6 +164,36 @@ await run('S1-06 parsea medidas con espacios y CPs en formato libre', async () =
   assert.equal(updated.form_data.cp_origen, '64000');
   assert.equal(updated.form_data.cp_destino, '06600');
   assert.equal(String(updated.form_data.peso), '4');
+});
+
+await run('S1-07 parsea formulario con viñetas y CP embebido en destino', async () => {
+  const text = `Origen
+\u2022 Nombre: Blanca Flores
+\u2022 Calle y n\u00famero: Manuel M. Ponce mz3 lt 23
+\u2022 Colonia : Pedro Ojeda paullada
+\u2022 C\u00f3digo postal :55295
+\u2022Ciudad:Ecatepec de Morelos
+\u2022 Tel\u00e9fono   5615396205
+
+Destino
+Santiago tirado
+Carr. M\u00e9xico Quer\u00e9taro km 212 s/N  F plazas del sol santiago de Quer\u00e9taro, Quer\u00e9taro Cp 76099
+40 x 30 x 30
+3kg`;
+
+  const { data, missing } = parser.parseForm(text);
+
+  assert.equal(data.nombre_origen, 'Blanca Flores');
+  assert.equal(data.calle_origen, 'Manuel M. Ponce mz3 lt 23');
+  assert.equal(data.colonia_origen, 'Pedro Ojeda paullada');
+  assert.equal(data.cp_origen, '55295');
+  assert.equal(data.cel_origen, '5615396205');
+  assert.equal(data.nombre_destino, 'Santiago tirado');
+  assert.equal(data.calle_destino, 'Carr. México Querétaro km 212 s/N F plazas del sol santiago de Querétaro, Querétaro');
+  assert.equal(data.cp_destino, '76099');
+  assert.equal(data.medidas, '40x30x30');
+  assert.equal(String(data.peso), '3');
+  assert.deepEqual(missing, []);
 });
 
 await run('S2-01 solo un CP de 5 dígitos se asigna a cp_origen', async () => {
@@ -309,6 +343,9 @@ await run('S3-01 respuesta afirmativa genera cotización y avanza', async () => 
 
   assert.equal(transition[1], 'AWAITING_INVOICE');
   assert.equal(transition[2], 'AWAITING_SELECTION');
+  assert.equal(transition[3].selected_carrier, null);
+  assert.equal(transition[3].total_amount, null);
+  assert.equal(transition[3].pending_location, null);
   assert.equal(lastMessage(sender), 'COTIZACION TEST');
 });
 
@@ -769,6 +806,44 @@ await run('FSM-07 mensajes de grupo se ignoran', async () => {
 
   assert.equal(touched, false);
   assert.equal(sender.messages.length, 0);
+});
+
+await run('BOT-01 messages.upsert procesa chats distintos en paralelo', async () => {
+  const calls = [];
+  let releaseFirst = null;
+  const firstStarted = new Promise(resolve => {
+    releaseFirst = resolve;
+  });
+
+  const routeFn = async rawMessage => {
+    calls.push(rawMessage.key.remoteJid);
+    if (rawMessage.key.remoteJid === 'cliente-1@s.whatsapp.net') {
+      await firstStarted;
+    }
+  };
+
+  const promise = handleMessagesUpsert(
+    {
+      type: 'notify',
+      messages: [
+        makeTextMessage({ chatId: 'cliente-1@s.whatsapp.net', id: 'parallel-1' }),
+        makeTextMessage({ chatId: 'cliente-2@s.whatsapp.net', id: 'parallel-2' }),
+      ],
+    },
+    createSender(),
+    { onWhatsApp: async () => [] },
+    routeFn
+  );
+
+  await Promise.resolve();
+
+  assert.deepEqual(calls, [
+    'cliente-1@s.whatsapp.net',
+    'cliente-2@s.whatsapp.net',
+  ]);
+
+  releaseFirst();
+  await promise;
 });
 
 await run('FSM-02 mensaje duplicado se ignora silenciosamente', async () => {

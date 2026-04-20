@@ -165,6 +165,11 @@ export async function handleAwaitingInvoice(ctx, deps = defaultDeps) {
         invoice_required: invoice,
         billable_weight: calc.pesoACobrar,
         oversize_charge: calc.cargoExtra,
+        selected_carrier: null,
+        total_amount: null,
+        pending_selection: null,
+        pending_location: null,
+        current_field: null,
         form_data: {
           ...validatedData,
           quotes: quotes.map(q => ({ id: q.id, label: q.label, total: q.total })),

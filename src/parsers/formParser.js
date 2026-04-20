@@ -73,6 +73,12 @@ function cleanName(value) {
   ]);
 }
 
+function stripListMarker(value) {
+  return String(value || '')
+    .replace(/^[\s>*\-•·▪▫‣⁃]+/u, '')
+    .trim();
+}
+
 function extractCP(text, side) {
   const norm = normalize(text);
   const normSide = normalize(side);
@@ -200,7 +206,7 @@ function extractBlock(text, startPattern, endPattern) {
 function parsePersonBlock(block) {
   const lines = block
     .split('\n')
-    .map(l => l.replace(/\*/g, '').trim())
+    .map(l => stripListMarker(l.replace(/\*/g, '').trim()))
     .filter(Boolean);
 
   const data = {};
@@ -239,7 +245,7 @@ function parsePersonBlock(block) {
     }
 
     // 2. DIRECCIÓN / CALLE
-    const direccionMatch = n.match(/^(?:dir[\w?]*|calle|domicilio|address)\s*:?\s*(.+)$/i);
+    const direccionMatch = n.match(/^(?:dir[\w?]*|calle(?:\s+y\s+nu?mero)?|domicilio|address)\s*:?\s*(.+)$/i);
     if (direccionMatch) {
       const value = takeTrailingValue(direccionMatch[1]);
       data.calle = /[a-zA-Z]/.test(value) ? value : originalLine;
@@ -269,6 +275,15 @@ function parsePersonBlock(block) {
 
     if (cpMatch) {
       data.cp = cpMatch[1];
+      const withoutCp = originalLine
+        .replace(/\bc\.?\s*p\.?\s*[:\s]?\s*\d{5}\b/i, '')
+        .replace(/\bcodigo\s+postal\s*:?\s*\d{5}\b/i, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      if (withoutCp && withoutCp !== originalLine && /[a-zA-Z]/.test(withoutCp)) {
+        untagged.push(withoutCp);
+      }
       continue;
     }
 
@@ -330,8 +345,11 @@ function parsePersonBlock(block) {
   // CALLE
   if (!data.calle && posQueue.length > 0) {
     const calleIdx = posQueue.findIndex(l =>
-      /\d/.test(l) ||
-      /retorno|avenida|av\.|calle|privada|prolongacion|boulevard|blvd|cerrada/i.test(l.toLowerCase())
+      !/\b\d+(?:\.\d+)?\s*[x×*]\s*\d+(?:\.\d+)?\s*[x×*]\s*\d+(?:\.\d+)?\b/i.test(l) &&
+      (
+        /\d/.test(l) ||
+        /retorno|avenida|av\.|calle|privada|prolongacion|boulevard|blvd|cerrada|carr\.?|carretera/i.test(l.toLowerCase())
+      )
     );
     if (calleIdx !== -1) {
       data.calle = posQueue.splice(calleIdx, 1)[0];

@@ -154,6 +154,14 @@ await sender.sendText(chatId, 'Por ahora solo puedo procesar texto 😊');
   await updateSessionFn(chatId, {
     state: nextState,
     form_data: combined,
+    selected_carrier: null,
+    invoice_required: null,
+    billable_weight: null,
+    oversize_charge: 0,
+    total_amount: null,
+    pending_selection: null,
+    pending_location: null,
+    current_field: null,
   });
 
   if (missing.length === 0) {

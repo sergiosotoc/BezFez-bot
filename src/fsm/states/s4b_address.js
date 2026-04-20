@@ -302,8 +302,16 @@ export async function handleAwaitingAddress(ctx) {
       await updateSession(chatId, { form_data: updated, pending_location: null });
       await sender.sendText(chatId, 'Perfecto 👍');
 
+      const missingAfterConfirm = getMissingFields(updated);
+      if (missingAfterConfirm.length > 0) {
+        await updateSession(chatId, { current_field: missingAfterConfirm[0] });
+        await sender.sendText(chatId, buildAddressForm(missingAfterConfirm));
+        return;
+      }
+
       return handleAwaitingAddress({
         ...ctx,
+        text: '__continuar__',
         session: { ...session, form_data: updated, pending_location: null },
       });
     }
@@ -377,6 +385,7 @@ export async function handleAwaitingAddress(ctx) {
       // 🔥 TODO COMPLETO → continuar flujo normal
       return handleAwaitingAddress({
         ...ctx,
+        text: '__continuar__',
         session: { ...session, form_data: merged }
       });
     }

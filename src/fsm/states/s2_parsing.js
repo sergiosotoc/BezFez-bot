@@ -155,7 +155,17 @@ export async function handleParsingData(ctx, deps = defaultDeps) {
       chatId,
       'PARSING_DATA',
       'AWAITING_INVOICE',
-      { form_data: cleanMerged }
+      {
+        form_data: cleanMerged,
+        selected_carrier: null,
+        invoice_required: null,
+        billable_weight: null,
+        oversize_charge: 0,
+        total_amount: null,
+        pending_selection: null,
+        pending_location: null,
+        current_field: null,
+      }
     );
 
     if (success) {

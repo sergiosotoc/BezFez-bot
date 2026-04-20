@@ -145,16 +145,10 @@ export async function startBot() {
     }, 2000);
   });
 
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
-
-    for (const rawMessage of messages) {
-      try {
-        await route(rawMessage, sender, sock);
-      } catch (err) {
-        logger.error({ err: err.message }, 'Error no capturado en route()');
-      }
-    }
+  sock.ev.on('messages.upsert', (event) => {
+    handleMessagesUpsert(event, sender, sock).catch(err => {
+      logger.error({ err: err.message }, 'Error no capturado en messages.upsert');
+    });
   });
 
   setInterval(() => {
@@ -164,4 +158,16 @@ export async function startBot() {
   }, 5 * 60 * 1000);
 
   return sock;
+}
+
+export async function handleMessagesUpsert({ messages, type }, sender, sock, routeFn = route) {
+  if (type !== 'notify') return;
+
+  await Promise.all(messages.map(async (rawMessage) => {
+    try {
+      await routeFn(rawMessage, sender, sock);
+    } catch (err) {
+      logger.error({ err: err.message }, 'Error no capturado en route()');
+    }
+  }));
 }
