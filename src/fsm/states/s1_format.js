@@ -78,6 +78,17 @@ function extractAddressDataFromInitialMessage(text) {
     if (libreData[field]) extracted[field] = libreData[field];
   }
 
+  // Validar que el contenido extraído no sea una frase descriptiva del paquete
+  if (extracted.contenido) {
+    const c = extracted.contenido;
+    const esBasura = (
+      /\b(?:mide|pesa|kg|kilos?|cm|por|de\s+\w+\s+a\s+\w+)\b/i.test(c) ||
+      /\d+\s*[x×]\s*\d+/.test(c) ||
+      c.length > 100
+    );
+    if (esBasura) delete extracted.contenido;
+  }
+
   // También capturar medidas y peso si los encontró el parser libre
   if (libreData.medidas) extracted.medidas = libreData.medidas;
   if (libreData.largo)   extracted.largo   = libreData.largo;

@@ -44,6 +44,17 @@ function extractAddressData(text) {
     if (libreData[field]) extracted[field] = libreData[field];
   }
 
+  // Rechazar contenido que sea en realidad una descripción física del paquete
+  if (extracted.contenido) {
+    const c = extracted.contenido;
+    const esBasura = (
+      /\b(?:mide|pesa|kg|kilos?|cm|por|de\s+\w+\s+a\s+\w+)\b/i.test(c) ||
+      /\d+\s*[x×]\s*\d+/.test(c) ||
+      c.length > 100
+    );
+    if (esBasura) delete extracted.contenido;
+  }
+
   if (libreData.medidas) extracted.medidas = libreData.medidas;
   if (libreData.peso)    extracted.peso    = libreData.peso;
 

@@ -1,6 +1,6 @@
 /* src/config/idex.js */
 import dotenv from 'dotenv';
-dotenv.config();
+dotenv.config({ path: '/home/sergiosc/Documents/BezFez-bot/.env' });
 
 function required(key) {
   const val = process.env[key];

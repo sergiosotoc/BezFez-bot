@@ -536,7 +536,7 @@ export async function handleAwaitingAddress(ctx) {
         pending_location: { type: 'origen', value: ciudadDetectada },
       });
       await sender.sendText(chatId,
-        `DetectÃ© para ORIGEN:\n\nðŸ“ ${ciudadDetectada}\n\nÂ¿Es correcto?\n1ï¸âƒ£ SÃ­\n2ï¸âƒ£ No`
+        `Detecté para ORIGEN:\n\n📍 ${ciudadDetectada}\n\n¿Es correcto?\n1️⃣ Sí\n2️⃣ No`
       );
       return;
     }

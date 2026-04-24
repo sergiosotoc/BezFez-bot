@@ -183,11 +183,11 @@ function isFormatoLibre(text) {
 }
 
 function hasAddressIntent(text) {
-  return /remitente|destinatario|receptor|recibe|origen|destino|\bdest\b|\borig(?:en)?\b|calle|colonia|ciudad|estado|cel|telefono|tel|direccion|direcciÃ³n|domicilio/i.test(text);
+  return /remitente|destinatario|receptor|recibe|origen|destino|\bdest\b|\borig(?:en)?\b|calle|colonia|ciudad|estado|cel|telefono|tel|direccion|direcci[oó]n|domicilio/i.test(text);
 }
 
 function hasPackageIntent(text) {
-  return /contenido|paquete|articulos|artÃ­culos|producto|mercancia|mercancÃ­a/i.test(text);
+  return /contenido|paquete|articulos|art[ií]culos|producto|mercancia|mercanc[ií]a/i.test(text);
 }
 
 function extractBlock(text, startPattern, endPattern) {
@@ -334,7 +334,7 @@ function parsePersonBlock(block) {
     }
   }
 
-  // TELÃ‰FONO sin etiqueta dentro del bloque
+  // TELÉFONO sin etiqueta dentro del bloque
   if (!data.cel && posQueue.length > 0) {
     const phoneIdx = posQueue.findIndex(l => !!extractTenDigitPhone(l));
     if (phoneIdx !== -1) {
@@ -588,20 +588,28 @@ export function parseFormatoLibre(text) {
   }
 
   // ──────────────── CONTENIDO ────────────────
-  const contenidoMatch = text.match(/(?:articulos?|contenido|artículos?|paquete|producto|mercancia|mercancía)\s*:?\s*(.+?)(?:\n|$)/i);
+  // Solo capturar contenido si viene explícitamente etiquetado con ":" (ej: "Contenido: ropa")
+  // Evitar capturar frases descriptivas como "un paquete que mide 30x20..."
+  const contenidoMatch = text.match(/(?:articulos?|contenido|art[ií]culos?|mercancia|mercanc[ií]a)\s*:\s*(.+?)(?:\n|$)/i);
   let posibleContenido = null;
 
   if (contenidoMatch) {
     posibleContenido = contenidoMatch[1].trim();
   } else if (packageIntent && !addressIntent) {
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
-    const lastLine = lines[lines.length - 1];
-    if (lastLine &&
-      lastLine.length >= 3 &&
-      lastLine.length <= 40 &&
-      !/\d/.test(lastLine) &&
-      !/[x×]/.test(lastLine)) {
-      posibleContenido = lastLine;
+    // Solo usar la última línea si el mensaje completo es muy corto (≤3 líneas)
+    // y la línea parece describir un objeto físico, no una instrucción
+    if (lines.length <= 3) {
+      const lastLine = lines[lines.length - 1];
+      const looksLikeInstruction = /favor|gracias|hola|espero|quiero|necesito|por|si |sí /i.test(lastLine);
+      if (lastLine &&
+        lastLine.length >= 3 &&
+        lastLine.length <= 40 &&
+        !/\d/.test(lastLine) &&
+        !/[x×]/.test(lastLine) &&
+        !looksLikeInstruction) {
+        posibleContenido = lastLine;
+      }
     }
   }
 
@@ -613,10 +621,13 @@ export function parseFormatoLibre(text) {
     ];
     const valido = (
       posibleContenido.length >= 3 &&
-      !palabrasInvalidas.includes(posibleContenido.toLowerCase()) &&
+      posibleContenido.length <= 100 &&
+      !palabrasInvalidas.some(p => posibleContenido.toLowerCase().includes(p)) &&
       !/calle|colonia|ciudad|cp|c\.p|estado|municipio/i.test(posibleContenido) &&
       !/^\d+$/.test(posibleContenido.replace(/\s/g, '')) &&
       !/\d+\s*[x×]\s*\d+/.test(posibleContenido) &&
+      // Rechazar frases que describen dimensiones, peso o rutas ("mide", "pesa", "va de", "kg")
+      !/\b(?:mide|pesa|kg|kilos?|cm|por|de\s+\w+\s+a\s+\w+)\b/i.test(posibleContenido) &&
       /[a-zA-Z]/.test(posibleContenido)
     );
     if (valido) {
@@ -730,12 +741,8 @@ export function mergeFormData(prev = {}, next = {}) {
     const clean = String(value).trim();
     if (!clean) return;
 
-    // Permitir guardar aunque no sea válido todavía
-    result[key] = clean;
-
-    if (result[key]) {
-      return;
-    }
+    // No sobreescribir campos que ya tienen un valor válido
+    if (result[key]) return;
 
     result[key] = clean;
   });
@@ -856,7 +863,28 @@ export function getMissingFields(data) {
     'peso'
   ];
 
-  return requiredFields.filter(f => !data[f]);
+  const missing = requiredFields.filter(f => !data[f]);
+
+  // Si medidas está pero las dimensiones no se descompusieron, forzar re-parseo
+  if (!missing.includes('medidas') && data.medidas) {
+    const hasAllDims = data.largo && data.ancho && data.alto;
+    if (!hasAllDims) {
+      // Intentar rescatar las dimensiones del string de medidas
+      const parts = String(data.medidas)
+        .split(/[x×*]/i)
+        .map(n => parseFloat(n.trim()));
+      if (parts.length === 3 && parts.every(n => !isNaN(n) && n > 0)) {
+        data.largo = parts[0];
+        data.ancho = parts[1];
+        data.alto  = parts[2];
+      } else {
+        // medidas existe pero no es parseable — tratar como faltante
+        missing.push('medidas');
+      }
+    }
+  }
+
+  return missing;
 }
 
 const SI_KEYWORDS = /^(s[ií]|yes|1|sí|si|claro|ok|dale|afirmativo)/i;
@@ -1004,8 +1032,13 @@ export function parseFlexibleInput(text) {
   if (cpOrigen) data.cp_origen = cpOrigen;
   if (cpDestino) data.cp_destino = cpDestino;
 
+  // detectLooseNumbers solo aplica para campos que aún no se encontraron
   const loose = detectLooseNumbers(text);
-  const finalData = mergeFormData(data, loose);
+  const looseFiltered = {};
+  if (!data.cp_origen && loose.cp_origen) looseFiltered.cp_origen = loose.cp_origen;
+  if (!data.cp_destino && loose.cp_destino) looseFiltered.cp_destino = loose.cp_destino;
+  if (!data.peso && loose.peso) looseFiltered.peso = loose.peso;
+  const finalData = mergeFormData(data, looseFiltered);
 
   return finalData;
 
